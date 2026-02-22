@@ -153,6 +153,26 @@ const KeyboardKeys = {
 
 // ============================================================
 // Auth request stub - falls back to system browser
+//
+// OAUTH COMPLIANCE:
+// This class satisfies the IPC contract for @ant/claude-native's
+// AuthRequest. It performs exactly ONE action: open a URL in the
+// user's default browser via xdg-open.
+//
+// What this stub DOES:
+//   - Opens the Anthropic OAuth URL in the system browser
+//
+// What this stub DOES NOT do:
+//   - Intercept, capture, or process the OAuth callback
+//   - Read, store, or forward any tokens or credentials
+//   - Register any deep-link / protocol handler (claude://)
+//   - Communicate with any server or external service
+//
+// The OAuth callback is handled entirely by the unmodified Claude
+// Desktop renderer code, which manages its own session with
+// Anthropic's servers. isAvailable() returns false to signal that
+// no native auth window is available — the renderer falls back to
+// its own browser-based OAuth flow.
 // ============================================================
 
 class AuthRequest extends EventEmitter {
@@ -160,17 +180,33 @@ class AuthRequest extends EventEmitter {
     super();
   }
 
-  start(url, callbackUrl) {
-    // Open URL in system browser
-    // SECURITY: Use execFile to prevent command injection
+  start(url, _callbackUrl) {
+    // SECURITY: Validate URL is an Anthropic OAuth origin before opening
+    const ALLOWED_AUTH_ORIGINS = [
+      'https://claude.ai', 'https://auth.anthropic.com',
+      'https://accounts.anthropic.com', 'https://console.anthropic.com',
+    ];
+    let parsedUrl;
+    try { parsedUrl = new URL(url); } catch (_) {
+      this.emit('error', new Error('Malformed auth URL'));
+      return;
+    }
+    if (!ALLOWED_AUTH_ORIGINS.includes(parsedUrl.origin)) {
+      console.error('[claude-native] Blocked non-Anthropic auth URL:', parsedUrl.origin);
+      this.emit('error', new Error('Auth URL origin not in allowlist: ' + parsedUrl.origin));
+      return;
+    }
+
+    // SECURITY: Use execFile (not exec) to prevent command injection
     const { execFile } = require('child_process');
     execFile('xdg-open', [url], (err) => {
       if (err) console.error('[claude-native] Failed to open browser:', err.message);
     });
 
-    // The app should handle the OAuth callback via deep link or manual paste
+    // Signal that native auth is unavailable — the renderer handles
+    // the OAuth callback itself. We never see the token.
     setTimeout(() => {
-      this.emit('error', new Error('Authentication via system browser - paste the callback URL when complete'));
+      this.emit('error', new Error('Authentication via system browser - callback handled by renderer'));
     }, 100);
   }
 
@@ -179,7 +215,7 @@ class AuthRequest extends EventEmitter {
   }
 
   static isAvailable() {
-    return false; // Force system browser auth
+    return false; // No native auth window — renderer handles OAuth directly
   }
 }
 

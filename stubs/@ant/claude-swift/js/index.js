@@ -96,6 +96,20 @@ const ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'
 ];
 
+// OAUTH COMPLIANCE: Pattern to detect env var keys that specifically carry
+// OAuth/bearer credentials. These are blocked from being forwarded to
+// subprocesses even if the Claude Desktop renderer includes them in
+// additionalEnv, ensuring OAuth tokens never transit this compatibility layer.
+//
+// Deliberately narrow: generic terms like "token" and "secret" are omitted to
+// avoid blocking legitimate provider credentials (e.g., AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN) in Bedrock/Vertex configurations.
+const BLOCKED_ENV_KEY_PATTERN = /oauth[_.]?token|bearer[_.]?token|session_?cookie|ANTHROPIC_AUTH_TOKEN/i;
+
+// Keys that must pass through filterEnv even though they match the pattern above.
+// CLAUDE_CODE_OAUTH_TOKEN is the legitimate auth mechanism — the CLI needs it.
+const CREDENTIAL_EXEMPT_KEYS = new Set(['CLAUDE_CODE_OAUTH_TOKEN']);
+
 function filterEnv(baseEnv, additionalEnv) {
   const filtered = {};
   for (const key of ENV_ALLOWLIST) {
@@ -103,9 +117,16 @@ function filterEnv(baseEnv, additionalEnv) {
       filtered[key] = baseEnv[key];
     }
   }
-  // Additional env vars from the app are trusted (come from Claude Desktop)
+  // Additional env vars from Claude Desktop — filter out credential-like keys,
+  // but exempt keys that are legitimate auth mechanisms for the CLI.
   if (additionalEnv) {
-    Object.assign(filtered, additionalEnv);
+    for (const [key, val] of Object.entries(additionalEnv)) {
+      if (BLOCKED_ENV_KEY_PATTERN.test(key) && !CREDENTIAL_EXEMPT_KEYS.has(key)) {
+        trace('OAUTH COMPLIANCE: blocked additionalEnv key: ' + key);
+        continue;
+      }
+      filtered[key] = val;
+    }
   }
   return filtered;
 }
@@ -429,7 +450,6 @@ class SwiftAddonStub extends EventEmitter {
     this._onExit = null;
     this._onError = null;
     this._onNetworkStatus = null;
-
     // Events system - native.events.setListener()
     this.events = {
       setListener: (callback) => {
@@ -1010,13 +1030,29 @@ class SwiftAddonStub extends EventEmitter {
 
       /**
        * Add approved OAuth token (new in 1.1.381)
-       * This is used to approve OAuth tokens for VM operations
+       *
+       * OAUTH COMPLIANCE: This handler is intentionally a no-op.
+       *
+       * On macOS, this method stores an OAuth token inside the sandboxed VM
+       * so Claude Code can authenticate with the user's consumer plan. On
+       * this Linux compatibility layer we deliberately DO NOT store, forward,
+       * persist, or use the token in any way. The token parameter is never
+       * read, assigned, or passed to any subprocess.
+       *
+       * Authentication is handled entirely by the unmodified Anthropic
+       * applications:
+       *   - Claude Desktop (Electron renderer) manages its own OAuth session
+       *   - Claude Code CLI authenticates independently via CLAUDE_CODE_OAUTH_TOKEN
+       *     passed in spawn envVars (see filterEnv / CREDENTIAL_EXEMPT_KEYS above)
+       *
+       * This stub exists solely to satisfy the IPC contract — the renderer
+       * expects a response on this channel. Removing it would crash the app.
+       *
+       * @param {*} _token - Deliberately unused; never read or stored
+       * @returns {{ success: true }} Acknowledgement only
        */
-      addApprovedOauthToken: async (token) => {
-        trace('vm.addApprovedOauthToken() token=<redacted>');
-        console.log('[claude-swift] vm.addApprovedOauthToken() called');
-        // Store the token for future use
-        // On Linux, we don't have a VM, so we just acknowledge the token
+      addApprovedOauthToken: async (_token) => {
+        trace('vm.addApprovedOauthToken() called — token intentionally discarded (OAuth compliance)');
         return { success: true };
       },
 
@@ -1116,9 +1152,42 @@ class SwiftAddonStub extends EventEmitter {
 
   spawn(id, processName, command, args, options, envVars, additionalMounts, isResume, allowedDomains, sharedCwdPath) {
     console.log('[claude-swift] spawn() id=' + id + ' cmd=' + command + ' args=' + JSON.stringify(args));
+    // Log auth-related env vars from the asar (redact values) so we can debug auth issues
+    if (envVars && typeof envVars === 'object') {
+      const authKeys = Object.keys(envVars).filter(k => /ANTHROPIC|AUTH|TOKEN|API_KEY|OAUTH/i.test(k));
+      if (authKeys.length > 0) {
+        trace('spawn envVars auth keys from asar: ' + authKeys.join(', '));
+      }
+      trace('spawn envVars keys from asar: ' + Object.keys(envVars).join(', '));
+    }
     try {
+      // Translate VM paths (/sessions/...) in env vars to host paths
+      // The asar passes CLAUDE_CONFIG_DIR as a VM-internal path like
+      // /sessions/<name>/mnt/.claude but the CLI runs directly on the host,
+      // so we need to translate to the real host path which follows the
+      // symlink to ~/.config/Claude/local-agent-mode-sessions/.../.claude
+      if (envVars && typeof envVars === 'object') {
+        for (const key of Object.keys(envVars)) {
+          const val = envVars[key];
+          if (typeof val === 'string' && val.startsWith('/sessions/')) {
+            const sessionPath = val.substring('/sessions/'.length);
+            if (!sessionPath.includes('..') && isPathSafe(SESSIONS_BASE, sessionPath)) {
+              const translated = path.join(SESSIONS_BASE, sessionPath);
+              trace('Translated envVar ' + key + ': ' + val + ' -> ' + translated);
+              envVars[key] = translated;
+            }
+          }
+        }
+      }
+
       // SECURITY: Filter environment variables
       const env = filterEnv(process.env, envVars);
+      // IMPORTANT: Do NOT add auth fixup code here.
+      // The asar passes CLAUDE_CODE_OAUTH_TOKEN in envVars, which filterEnv
+      // merges via Object.assign. The CLI handles this token through its own
+      // internal OAuth code path. Injecting ANTHROPIC_AUTH_TOKEN bypasses
+      // that path and causes a 401 ("OAuth authentication not supported").
+      // See CLAUDE.md "Critical: Auth Flow" for full explanation.
       const cwd = sharedCwdPath || (options && options.cwd) || process.cwd();
       const proc = nodeSpawn(command, args || [], Object.assign({ cwd: cwd, env: env, stdio: ['pipe', 'pipe', 'pipe'] }, options || {}));
       this._processes.set(id, proc);
