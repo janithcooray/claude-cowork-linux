@@ -354,7 +354,8 @@ extract_app() {
     local dmg_path="$1"
     local extract_dir="$2"
 
-    log_info "Extracting DMG..."
+    # Log to stderr — stdout is captured by the caller via $()
+    log_info "Extracting DMG..." >&2
     7z x -y -o"$extract_dir" "$dmg_path" >/dev/null 2>&1 || die "Failed to extract DMG"
 
     # Find Claude.app
@@ -364,7 +365,7 @@ extract_app() {
         die "Claude.app not found in DMG"
     fi
 
-    log_success "Extracted Claude.app"
+    log_success "Extracted Claude.app" >&2
     echo "$claude_app"
 }
 
