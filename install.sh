@@ -26,10 +26,8 @@ set -euo pipefail
 VERSION="2.0.0"
 CLAUDE_VERSION="latest"
 
-# Direct download URL for the latest Claude Desktop DMG.
-# The claude.ai/download page is CF-protected; this versioned URL works with curl.
-# Update CLAUDE_DMG_URL when a new release ships (or set CLAUDE_DMG to a local path).
-CLAUDE_DMG_URL="https://downloads.claude.ai/releases/darwin/universal/1.1.3963/Claude-71a7aee7e4c1ab9eb313dc3051d72cf09be28d70.dmg"
+# Claude Desktop download page (Cloudflare-protected; opened in browser, not curl'd)
+CLAUDE_DOWNLOAD_PAGE="https://claude.ai/download"
 
 # Stub download URLs (from GitHub repo)
 REPO_BASE="https://raw.githubusercontent.com/johnzfitch/claude-cowork-linux/master"
@@ -121,7 +119,7 @@ verify_checksum() {
     if [[ -z "$expected_sha256" ]]; then
         log_warn "No SHA256 checksum provided (set CLAUDE_DMG_SHA256=<hash> to verify)"
         log_info "Anthropic does not publish official checksums for Claude Desktop DMG"
-        log_info "Download URL: $CLAUDE_DMG_URL"
+        log_info "Download page: $CLAUDE_DOWNLOAD_PAGE"
         return 0
     fi
     
@@ -288,36 +286,29 @@ download_dmg() {
         fi
     fi
 
-    log_info "Downloading Claude Desktop..."
-    log_info "URL: $CLAUDE_DMG_URL"
+    # Open the browser to claude.ai/download so the user always gets the latest build.
+    # The download page is Cloudflare-protected and can't be curl'd directly.
+    local dl_dir
+    dl_dir=$(xdg-user-dir DOWNLOAD 2>/dev/null || echo "$HOME/Downloads")
+    local marker
+    marker=$(mktemp)
+
+    log_info "Opening claude.ai/download in your browser..."
+    log_info "Download the macOS (Universal) DMG — the installer will continue automatically."
     echo ""
+    xdg-open "$CLAUDE_DOWNLOAD_PAGE" 2>/dev/null || true
 
-    # Try direct versioned URL
-    if curl -fSL --progress-bar -o "$dmg_path" "$CLAUDE_DMG_URL" 2>/dev/null; then
-        log_success "Downloaded successfully"
-    else
-        # Direct URL failed — open browser and wait for user to download
-        log_warn "Automatic download failed. Opening claude.ai/download in your browser..."
-        log_info "Please download the macOS (Universal) DMG, then come back here."
-        echo ""
-        xdg-open "https://claude.ai/download" 2>/dev/null || true
-
-        # Watch the user's download directory for a Claude DMG (created after this point)
-        local marker
-        marker=$(mktemp)
-        local dl_dir
-        dl_dir=$(xdg-user-dir DOWNLOAD 2>/dev/null || echo "$HOME/Downloads")
-        log_info "Watching $dl_dir for Claude*.dmg ..."
-        local found=""
-        while [[ -z "$found" ]]; do
-            sleep 2
-            found=$(find "$dl_dir" -maxdepth 1 \( -name "Claude*.dmg" -o -name "claude*.dmg" \) \
-                -newer "$marker" -type f -print -quit 2>/dev/null)
-        done
-        rm -f "$marker"
-        log_success "Found: $found"
-        cp "$found" "$dmg_path"
-    fi
+    # Watch the user's XDG download directory for a new Claude DMG
+    log_info "Waiting for Claude*.dmg in $dl_dir ..."
+    local found=""
+    while [[ -z "$found" ]]; do
+        sleep 2
+        found=$(find "$dl_dir" -maxdepth 1 \( -name "Claude*.dmg" -o -name "claude*.dmg" \) \
+            -newer "$marker" -type f -print -quit 2>/dev/null)
+    done
+    rm -f "$marker"
+    log_success "Found: $found"
+    cp "$found" "$dmg_path"
 
     # Verify download size (minimum 100MB for valid DMG)
     local dmg_size
