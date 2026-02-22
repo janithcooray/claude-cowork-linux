@@ -445,7 +445,7 @@ app.whenReady().then(() => {
 // 4. IPC DEBUGGING
 // ============================================================
 
-const { ipcMain } = electron;
+const { ipcMain, dialog, BrowserWindow } = electron;
 
 // Log ALL IPC handle registrations to find cowork-related ones
 const origHandle = ipcMain.handle.bind(ipcMain);
@@ -505,7 +505,15 @@ function registerEipcHandler(handlerName, handler, isSync = false) {
             }
           });
         } else {
-          ipcMain.handle(channel, handler);
+          // Wrap async handlers with error boundary
+          ipcMain.handle(channel, async (event, ...args) => {
+            try {
+              return await handler(event, ...args);
+            } catch (e) {
+              console.error(`[IPC] Handler error ${handlerName}:`, e.message);
+              throw e; // Electron propagates this as a rejected invoke() in the renderer
+            }
+          });
         }
         registeredHandlers.add(channel);
       } catch (e) {
@@ -581,6 +589,236 @@ registerEipcHandler('ClaudeVM_$_getSupportStatus', async () => ({
   status: 'supported',
 }));
 
+registerEipcHandler('ClaudeVM_$_setYukonSilverConfig', async () => {
+  console.log('[IPC] ClaudeVM_$_setYukonSilverConfig called (no-op)');
+  return { success: true };
+});
+
+registerEipcHandler('ClaudeVM_$_deleteAndReinstall', async () => {
+  console.log('[IPC] ClaudeVM_$_deleteAndReinstall called (no-op)');
+  return { success: true };
+});
+
+// ===== FileSystem - File browsing and I/O =====
+registerEipcHandler('FileSystem_$_browseFolder', async () => {
+  try {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_browseFolder error:', e.message);
+    return null;
+  }
+});
+
+registerEipcHandler('FileSystem_$_getSystemPath', async (_event, pathName) => {
+  try {
+    const pathMap = {
+      home: app.getPath('home'),
+      desktop: app.getPath('desktop'),
+      downloads: app.getPath('downloads'),
+      documents: app.getPath('documents'),
+      temp: app.getPath('temp'),
+      appdata: app.getPath('appData'),
+      userdata: app.getPath('userData'),
+    };
+    return pathMap[pathName] || app.getPath('home');
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_getSystemPath error:', e.message);
+    return app.getPath('home');
+  }
+});
+
+registerEipcHandler('FileSystem_$_readFile', async (_event, filePath) => {
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_readFile error:', e.message);
+    throw e;
+  }
+});
+
+registerEipcHandler('FileSystem_$_writeFile', async (_event, filePath, content) => {
+  try {
+    fs.writeFileSync(filePath, content);
+    return { success: true };
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_writeFile error:', e.message);
+    throw e;
+  }
+});
+
+registerEipcHandler('FileSystem_$_exists', async (_event, filePath) => {
+  return fs.existsSync(filePath);
+});
+
+registerEipcHandler('FileSystem_$_whichApplication', async () => {
+  // Stub: return null (not supported on Linux without additional logic)
+  return null;
+});
+
+// ===== AppConfig - Application configuration =====
+registerEipcHandler('AppConfig_$_getAppConfig', async () => ({
+  claudeAiUrl: 'https://claude.ai',
+  isSwiftEnabled: true,
+  secureVmFeaturesEnabled: true,
+  coworkEnabled: true,
+  localAgentModeEnabled: true,
+}));
+
+registerEipcHandler('AppConfig_$_setAppFeature', async (_event, featureName, value) => {
+  console.log(`[IPC] AppConfig_$_setAppFeature: ${featureName} = ${value}`);
+  return { success: true };
+});
+
+registerEipcHandler('AppConfig_$_setIsUsingBuiltInNodeForMcp', async (_event, value) => {
+  console.log(`[IPC] AppConfig_$_setIsUsingBuiltInNodeForMcp: ${value}`);
+  return { success: true };
+});
+
+registerEipcHandler('AppConfig_$_setIsDxtAutoUpdatesEnabled', async (_event, value) => {
+  console.log(`[IPC] AppConfig_$_setIsDxtAutoUpdatesEnabled: ${value}`);
+  return { success: true };
+});
+
+// ===== DesktopInfo - System information =====
+registerEipcHandler('DesktopInfo_$_getSystemInfo', async () => ({
+  platform: 'darwin',
+  arch: 'arm64',
+  version: '14.0.0',
+  isLinux: false,
+  isMac: true,
+  isWindows: false,
+}));
+
+// ===== ClaudeCode - Claude Code integration =====
+registerEipcHandler('ClaudeCode_$_prepare', async () => ({
+  ready: true,
+}));
+
+registerEipcHandler('ClaudeCode_$_getStatus', async () => ({
+  ready: true,
+  running: true,
+  connected: true,
+}));
+
+// ===== BrowserNavigation - Navigation state =====
+registerEipcHandler('BrowserNavigation_$_navigationState_$store$_getState', async () => ({
+  canGoBack: false,
+  canGoForward: false,
+}));
+
+registerEipcHandler('BrowserNavigation_$_navigationState_$store$_getStateSync', (_event) => ({
+  result: { canGoBack: false, canGoForward: false },
+  error: null,
+}), true); // sync handler
+
+registerEipcHandler('BrowserNavigation_$_reportNavigationState', async () => {
+  return { success: true };
+});
+
+registerEipcHandler('BrowserNavigation_$_goBack', async () => {
+  console.log('[IPC] BrowserNavigation_$_goBack called (no-op)');
+});
+
+registerEipcHandler('BrowserNavigation_$_goForward', async () => {
+  console.log('[IPC] BrowserNavigation_$_goForward called (no-op)');
+});
+
+registerEipcHandler('BrowserNavigation_$_requestMainMenuPopup', async () => {
+  console.log('[IPC] BrowserNavigation_$_requestMainMenuPopup called (no-op)');
+});
+
+// ===== AppPreferences - User preferences =====
+registerEipcHandler('AppPreferences_$_getPreferences', async () => ({
+  secureVmFeaturesEnabled: true,
+  autoUpdate: true,
+  theme: 'system',
+}));
+
+registerEipcHandler('AppPreferences_$_setPreference', async (_event, key, value) => {
+  console.log(`[IPC] AppPreferences_$_setPreference: ${key} = ${value}`);
+  return { success: true };
+});
+
+// ===== Startup - Login and menu bar settings =====
+registerEipcHandler('Startup_$_isStartupOnLoginEnabled', async () => false);
+
+registerEipcHandler('Startup_$_setStartupOnLoginEnabled', async (_event, enabled) => {
+  console.log(`[IPC] Startup_$_setStartupOnLoginEnabled: ${enabled}`);
+  return { success: true };
+});
+
+registerEipcHandler('Startup_$_isMenuBarEnabled', async () => false);
+
+registerEipcHandler('Startup_$_setMenuBarEnabled', async (_event, enabled) => {
+  console.log(`[IPC] Startup_$_setMenuBarEnabled: ${enabled}`);
+  return { success: true };
+});
+
+// ===== WindowState - Window state queries =====
+registerEipcHandler('WindowState_$_getFullscreen', async () => false);
+
+// ===== WindowControl - Window manipulation =====
+registerEipcHandler('WindowControl_$_resize', async (_event, width, height) => {
+  try {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.setSize(width, height);
+    }
+  } catch (e) {
+    console.error('[IPC] WindowControl_$_resize error:', e.message);
+  }
+});
+
+registerEipcHandler('WindowControl_$_focus', async () => {
+  try {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.focus();
+    }
+  } catch (e) {
+    console.error('[IPC] WindowControl_$_focus error:', e.message);
+  }
+});
+
+// ===== LocalSessions - Local session management =====
+registerEipcHandler('LocalSessions_$_getAll', async () => []);
+
+registerEipcHandler('LocalSessions_$_getGitInfo', async () => ({
+  branches: [],
+  currentBranch: null,
+  remotes: [],
+}));
+
+// ===== LocalKBs - Local knowledge bases =====
+registerEipcHandler('LocalKBs_$_list', async () => []);
+
+// ===== LocalSessionEnvironment - Environment variables =====
+const localEnvVars = { ...process.env };
+
+registerEipcHandler('LocalSessionEnvironment_$_get', async () => ({ ...localEnvVars }));
+
+registerEipcHandler('LocalSessionEnvironment_$_save', async (_event, envVars) => {
+  Object.keys(localEnvVars).forEach(k => delete localEnvVars[k]);
+  Object.assign(localEnvVars, envVars);
+  console.log('[IPC] LocalSessionEnvironment_$_save: updated env vars');
+  return { success: true };
+});
+
+// ===== AutoUpdater - Auto-update handlers =====
+registerEipcHandler('AutoUpdater_$_restartToUpdate', async () => false);
+
+registerEipcHandler('AutoUpdater_$_updaterState_$store$_getStateSync', (_event) => ({
+  result: {
+    status: 'idle',
+    version: null,
+    downloaded: false,
+  },
+  error: null,
+}), true); // sync handler
+
 // ===== LocalAgentMode / Cowork sessions =====
 // Full session management with Claude Agent SDK bridge
 
@@ -597,7 +835,58 @@ let focusedSessionId = null;
 // State persistence
 const LOCAL_AGENT_STATE_DIR = path.join(os.homedir(), '.config', 'Claude', 'LocalAgentModeSessions');
 const LOCAL_AGENT_STATE_FILE = path.join(LOCAL_AGENT_STATE_DIR, 'sessions.json');
+// ipc-handler-setup.js reads from the macOS-style path (~/Library/Application Support/Claude/...)
+// We must also save there so sessions survive app restarts via the asar's hydration code.
+const IPC_HANDLER_STATE_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'LocalAgentModeSessions');
+const IPC_HANDLER_STATE_FILE = path.join(IPC_HANDLER_STATE_DIR, 'sessions.json');
 let stateSaveTimer = null;
+
+// The asar's LocalSessionManager stores per-session data (including .claude/projects/)
+// under ~/.config/Claude/local-agent-mode-sessions/<userId>/<orgId>/.
+// We discover this path at startup so we can create .claude/projects/ where the asar expects it.
+const ASAR_SESSIONS_BASE = path.join(os.homedir(), '.config', 'Claude', 'local-agent-mode-sessions');
+
+/**
+ * Discover the asar's session storage directory by scanning for UUID-named subdirectories.
+ * Returns the <userId>/<orgId> dir, or null if not found.
+ */
+function discoverAsarSessionStorageDir() {
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  try {
+    if (!fs.existsSync(ASAR_SESSIONS_BASE)) return null;
+    for (const userId of fs.readdirSync(ASAR_SESSIONS_BASE)) {
+      if (!uuidRe.test(userId)) continue;
+      const userDir = path.join(ASAR_SESSIONS_BASE, userId);
+      if (!fs.statSync(userDir).isDirectory()) continue;
+      for (const orgId of fs.readdirSync(userDir)) {
+        if (!uuidRe.test(orgId)) continue;
+        const orgDir = path.join(userDir, orgId);
+        if (fs.statSync(orgDir).isDirectory()) return orgDir;
+      }
+    }
+  } catch (_) { /* best effort */ }
+  return null;
+}
+
+const asarSessionStorageDir = discoverAsarSessionStorageDir();
+if (asarSessionStorageDir) {
+  console.log('[Cowork] Discovered asar session storage dir:', asarSessionStorageDir);
+}
+
+/**
+ * Get or create the .claude/projects directory for a session inside the asar's storage.
+ * Returns the host path to the .claude dir, or null if the asar storage dir is unknown.
+ */
+function ensureAsarClaudeConfigDir(sessionId) {
+  if (!asarSessionStorageDir) return null;
+  const sessionDir = path.join(asarSessionStorageDir, sessionId);
+  const claudeDir = path.join(sessionDir, '.claude');
+  const projectsDir = path.join(claudeDir, 'projects');
+  try {
+    fs.mkdirSync(projectsDir, { recursive: true, mode: 0o700 });
+  } catch (_) { /* best effort */ }
+  return claudeDir;
+}
 
 function generateUUID() {
   const crypto = require('crypto');
@@ -616,10 +905,20 @@ function normalizeSessionId(sessionId) {
   return sessionId.startsWith('local_') ? sessionId : `local_${sessionId}`;
 }
 
-function normalizeConversationUuid(value) {
-  if (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
-    return value;
+/**
+ * Derive conversationUuid from sessionId by stripping the `local_` prefix.
+ * The webapp uses this as a path parameter in API calls, so it must be a valid UUID.
+ */
+function deriveConversationUuid(sessionId, fallback) {
+  // If an explicit conversationUuid was provided and is a valid UUID, use it
+  if (typeof fallback === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fallback)) {
+    return fallback;
   }
+  // Derive from sessionId by stripping the local_ prefix
+  if (typeof sessionId === 'string' && sessionId.startsWith('local_')) {
+    return sessionId.replace(/^local_/, '');
+  }
+  // Last resort: generate a new one
   return generateUUID();
 }
 
@@ -632,8 +931,8 @@ function buildSession(info = {}) {
 
   return {
     sessionId,
-    uuid: normalizeConversationUuid(info.uuid),
-    conversationUuid: normalizeConversationUuid(info.conversationUuid),
+    uuid: sessionId,
+    conversationUuid: deriveConversationUuid(sessionId, info.conversationUuid),
     cwd,
     originCwd: cwd,
     userSelectedFolders: Array.isArray(info.userSelectedFolders) ? info.userSelectedFolders : [],
@@ -657,9 +956,21 @@ function buildSession(info = {}) {
 function getSession(sessionId) {
   if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
   const direct = localAgentSessions.get(sessionId);
-  if (direct) return direct;
+  if (direct) {
+    // Ensure conversationUuid is always present and valid
+    if (!direct.conversationUuid || direct.conversationUuid.startsWith('local_')) {
+      direct.conversationUuid = deriveConversationUuid(direct.sessionId);
+      direct.uuid = direct.sessionId;
+    }
+    return direct;
+  }
   const normalized = sessionId.startsWith('local_') ? sessionId : `local_${sessionId}`;
-  return localAgentSessions.get(normalized) || null;
+  const session = localAgentSessions.get(normalized) || null;
+  if (session && (!session.conversationUuid || session.conversationUuid.startsWith('local_'))) {
+    session.conversationUuid = deriveConversationUuid(session.sessionId);
+    session.uuid = session.sessionId;
+  }
+  return session;
 }
 
 function updateSession(sessionId, updates) {
@@ -673,19 +984,34 @@ function updateSession(sessionId, updates) {
 
 function saveState(reason) {
   try {
-    fs.mkdirSync(LOCAL_AGENT_STATE_DIR, { recursive: true, mode: 0o700 });
+    const sessions = Array.from(localAgentSessions.values()).map(s => {
+      // Strip transcript from persisted state (too large)
+      const { transcript, ...rest } = s;
+      // Ensure conversationUuid is always derived correctly
+      rest.uuid = rest.sessionId;
+      rest.conversationUuid = deriveConversationUuid(rest.sessionId, rest.conversationUuid);
+      return rest;
+    });
     const payload = {
       version: 1,
       savedAt: new Date().toISOString(),
-      sessions: Array.from(localAgentSessions.values()).map(s => {
-        // Strip transcript from persisted state (too large)
-        const { transcript, ...rest } = s;
-        return rest;
-      }),
+      sessions,
       trustedFolders: Array.from(trustedFolders),
       focusedSessionId,
     };
-    fs.writeFileSync(LOCAL_AGENT_STATE_FILE, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    const json = JSON.stringify(payload, null, 2);
+
+    // Write to our primary state directory
+    fs.mkdirSync(LOCAL_AGENT_STATE_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(LOCAL_AGENT_STATE_FILE, json, { mode: 0o600 });
+
+    // Also write to the path ipc-handler-setup.js reads from (~/Library/Application Support/...)
+    // so sessions persist across app restarts via the asar's hydration code.
+    try {
+      fs.mkdirSync(IPC_HANDLER_STATE_DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(IPC_HANDLER_STATE_FILE, json, { mode: 0o600 });
+    } catch (_) { /* non-critical */ }
+
     console.log(`[Cowork] State saved (${reason})`);
   } catch (e) {
     console.error('[Cowork] Failed to save state:', e.message);
@@ -697,48 +1023,189 @@ function scheduleSave(reason) {
   stateSaveTimer = setTimeout(() => { stateSaveTimer = null; saveState(reason); }, 250);
 }
 
-function loadState() {
-  try {
-    if (!fs.existsSync(LOCAL_AGENT_STATE_FILE)) return;
-    const raw = fs.readFileSync(LOCAL_AGENT_STATE_FILE, 'utf8');
-    const payload = JSON.parse(raw);
-    const sessionList = Array.isArray(payload.sessions) ? payload.sessions : [];
-    for (const rawSession of sessionList) {
-      if (!rawSession || typeof rawSession !== 'object') continue;
-      const sessionId = normalizeSessionId(rawSession.sessionId || rawSession.uuid);
-      const session = {
-        ...rawSession,
-        sessionId,
-        uuid: normalizeConversationUuid(rawSession.uuid),
-        conversationUuid: normalizeConversationUuid(rawSession.conversationUuid),
-        isRunning: false, // Not running after restart
-        transcript: [],
-      };
-      localAgentSessions.set(sessionId, session);
-    }
-    if (Array.isArray(payload.trustedFolders)) {
-      payload.trustedFolders.forEach(f => { if (typeof f === 'string' && f.length > 0) trustedFolders.add(f); });
-    }
-    if (typeof payload.focusedSessionId === 'string') {
-      focusedSessionId = payload.focusedSessionId;
-    }
-    console.log(`[Cowork] Loaded ${localAgentSessions.size} sessions from state`);
-  } catch (e) {
-    console.error('[Cowork] Failed to load state:', e.message);
+function hydrateSessionPayload(payload) {
+  const sessionList = Array.isArray(payload.sessions) ? payload.sessions
+    : Array.isArray(payload) ? payload : [];
+  for (const rawSession of sessionList) {
+    if (!rawSession || typeof rawSession !== 'object') continue;
+    const sessionId = normalizeSessionId(rawSession.sessionId || rawSession.uuid || rawSession.conversationUuid);
+    if (localAgentSessions.has(sessionId)) continue; // don't overwrite existing
+
+    // Ensure .claude/projects dir exists for the asar's transcript recovery
+    const claudeConfigDir = ensureAsarClaudeConfigDir(sessionId);
+
+    const session = {
+      ...rawSession,
+      sessionId,
+      uuid: sessionId,
+      conversationUuid: deriveConversationUuid(sessionId, rawSession.conversationUuid),
+      isRunning: false, // Not running after restart
+      transcript: [],
+      ...(claudeConfigDir ? { claudeConfigDir } : {}),
+    };
+    localAgentSessions.set(sessionId, session);
+  }
+  if (Array.isArray(payload.trustedFolders)) {
+    payload.trustedFolders.forEach(f => { if (typeof f === 'string' && f.length > 0) trustedFolders.add(f); });
+  }
+  if (typeof payload.focusedSessionId === 'string' && !focusedSessionId) {
+    focusedSessionId = payload.focusedSessionId;
   }
 }
 
-// Load persisted sessions on startup
+function loadState() {
+  // Check multiple candidate paths (our primary + ipc-handler-setup.js path + legacy)
+  const candidates = [
+    LOCAL_AGENT_STATE_FILE,
+    IPC_HANDLER_STATE_FILE,
+    path.join(os.homedir(), '.local', 'share', 'claude-cowork', 'LocalAgentModeSessions', 'sessions.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const raw = fs.readFileSync(candidate, 'utf8');
+      const payload = JSON.parse(raw);
+      hydrateSessionPayload(payload);
+      console.log(`[Cowork] Loaded sessions from ${candidate}`);
+    } catch (e) {
+      // Skip this candidate, try next
+    }
+  }
+  console.log(`[Cowork] Total sessions after load: ${localAgentSessions.size}`);
+}
+
+// Load persisted sessions on startup, then immediately flush corrected UUIDs
+// back to disk so the asar's ipc-handler-setup.js reads clean data when it
+// hydrates moments later (it reads the same sessions.json file independently).
 loadState();
+if (localAgentSessions.size > 0) {
+  saveState('startup-uuid-fixup');
+}
+
+// Migrate existing transcripts to session-specific dirs where the asar expects them.
+//
+// Before this fix, CLAUDE_CONFIG_DIR contained a VM-internal path (/sessions/...)
+// that the stub's symlink mapped to ~/.local/share/claude-cowork/sessions/<name>/mnt/.claude/
+// instead of the asar-expected path at ~/.config/Claude/local-agent-mode-sessions/.../<sessionId>/.claude/.
+// The asar's getTranscript() looks in the latter, so we scan both legacy locations:
+//   1. ~/.claude/projects/ (global CLI config, pre-patch)
+//   2. ~/.local/share/claude-cowork/sessions/<name>/mnt/.claude/projects/ (post-patch but pre-env-fix)
+function migrateTranscriptsForExistingSessions() {
+  if (!asarSessionStorageDir) return;
+
+  // Build list of source directories to scan for transcripts
+  const sourceProjectDirs = [];
+
+  // Source 1: Global ~/.claude/projects/
+  const globalClaudeDir = path.join(os.homedir(), '.claude', 'projects');
+  if (fs.existsSync(globalClaudeDir)) {
+    sourceProjectDirs.push(globalClaudeDir);
+  }
+
+  // Source 2: Per-session dirs under ~/.local/share/claude-cowork/sessions/*/mnt/.claude/projects/
+  const coworkSessionsBase = path.join(os.homedir(), '.local', 'share', 'claude-cowork', 'sessions');
+  try {
+    if (fs.existsSync(coworkSessionsBase)) {
+      for (const sessionName of fs.readdirSync(coworkSessionsBase)) {
+        const projectsDir = path.join(coworkSessionsBase, sessionName, 'mnt', '.claude', 'projects');
+        if (fs.existsSync(projectsDir)) {
+          sourceProjectDirs.push(projectsDir);
+        }
+      }
+    }
+  } catch (_) { /* best effort */ }
+
+  if (sourceProjectDirs.length === 0) return;
+
+  let migrated = 0;
+  for (const session of localAgentSessions.values()) {
+    const ccId = session.ccConversationId;
+    if (!ccId) continue;
+
+    const sessionProjectsDir = path.join(asarSessionStorageDir, session.sessionId, '.claude', 'projects');
+
+    for (const srcProjectsDir of sourceProjectDirs) {
+      try {
+        for (const projectHash of fs.readdirSync(srcProjectsDir)) {
+          const srcFile = path.join(srcProjectsDir, projectHash, `${ccId}.jsonl`);
+          if (!fs.existsSync(srcFile)) continue;
+
+          const destDir = path.join(sessionProjectsDir, projectHash);
+          const destFile = path.join(destDir, `${ccId}.jsonl`);
+          if (fs.existsSync(destFile)) continue; // already migrated
+
+          try {
+            fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
+            // Use symlink (saves disk space, stays in sync) with hard link fallback
+            try {
+              fs.symlinkSync(srcFile, destFile);
+            } catch (_) {
+              fs.linkSync(srcFile, destFile);
+            }
+            migrated++;
+            console.log(`[Cowork] Migrated transcript for ${session.sessionId}: ${ccId}.jsonl from ${srcProjectsDir}`);
+          } catch (e) {
+            console.warn(`[Cowork] Failed to migrate transcript ${ccId}.jsonl:`, e.message);
+          }
+        }
+      } catch (_) { /* best effort */ }
+    }
+  }
+  if (migrated > 0) {
+    console.log(`[Cowork] Migrated ${migrated} transcript file(s) to session-specific dirs`);
+  }
+}
+migrateTranscriptsForExistingSessions();
 
 // --- Session lifecycle handlers ---
+
+/**
+ * Callback for when the SDK bridge captures a CLI conversation ID.
+ * Persists it in the session so --resume works after app restart.
+ */
+function onConversationIdCaptured(sessionId, ccConversationId) {
+  const session = getSession(sessionId);
+  if (session) {
+    session.ccConversationId = ccConversationId;
+    scheduleSave('ccConversationId');
+  }
+}
+
+/**
+ * Ensure the SDK bridge has a live session state. For rehydrated sessions
+ * (loaded from disk after restart), the bridge is empty and needs re-init.
+ */
+async function ensureBridgeSession(sessionId) {
+  if (sdkBridge.hasSession(sessionId)) return;
+  const session = getSession(sessionId);
+  if (!session) return;
+  console.log('[Cowork] Re-initializing bridge for rehydrated session:', sessionId);
+  // Ensure the .claude/projects dir exists and pass the config dir path to the bridge
+  if (!session.claudeConfigDir) {
+    const claudeConfigDir = ensureAsarClaudeConfigDir(sessionId);
+    if (claudeConfigDir) {
+      session.claudeConfigDir = claudeConfigDir;
+    }
+  }
+  await sdkBridge.startSession(sessionId, session, emitLocalAgentEvent, {
+    onConversationId: onConversationIdCaptured,
+  });
+}
 
 registerEipcHandler('LocalAgentModeSessions_$_start', async (_event, info) => {
   const session = buildSession(info);
   localAgentSessions.set(session.sessionId, session);
   console.log('[Cowork] Starting session:', session.sessionId);
 
-  await sdkBridge.startSession(session.sessionId, session, emitLocalAgentEvent);
+  // Ensure the asar's .claude/projects dir exists so transcript recovery works after restart
+  const claudeConfigDir = ensureAsarClaudeConfigDir(session.sessionId);
+  if (claudeConfigDir) {
+    session.claudeConfigDir = claudeConfigDir;
+  }
+
+  await sdkBridge.startSession(session.sessionId, session, emitLocalAgentEvent, {
+    onConversationId: onConversationIdCaptured,
+  });
   scheduleSave('start');
   emitLocalAgentEvent({ type: 'sessionsUpdated', sessionId: session.sessionId });
   return { sessionId: session.sessionId, conversationUuid: session.conversationUuid };
@@ -746,28 +1213,34 @@ registerEipcHandler('LocalAgentModeSessions_$_start', async (_event, info) => {
 
 registerEipcHandler('LocalAgentModeSessions_$_sendMessage', async (_event, sessionId, message, images, files) => {
   const session = getSession(sessionId);
-  if (session) {
-    const entry = {
-      type: 'user',
-      message,
-      images: images || [],
-      files: files || [],
-      timestamp: Date.now(),
-    };
-    session.transcript.push(entry);
-    session.lastActivityAt = Date.now();
-    scheduleSave('sendMessage');
-    emitLocalAgentEvent({ type: 'data', sessionId, data: JSON.stringify(entry) });
+  if (!session) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
 
-    try {
-      await sdkBridge.sendMessage(sessionId, message, images, files);
-    } catch (e) {
-      console.error('[Cowork] sendMessage bridge error:', e.message);
-      emitLocalAgentEvent({
-        type: 'data', sessionId,
-        data: JSON.stringify({ role: 'assistant', content: [{ type: 'text', text: `[Error processing message: ${e.message}]` }] }),
-      });
-    }
+  // Re-init bridge for sessions that were loaded from disk (no live bridge state)
+  await ensureBridgeSession(session.sessionId);
+  session.isRunning = true;
+
+  const entry = {
+    type: 'user',
+    message,
+    images: images || [],
+    files: files || [],
+    timestamp: Date.now(),
+  };
+  session.transcript.push(entry);
+  session.lastActivityAt = Date.now();
+  scheduleSave('sendMessage');
+  emitLocalAgentEvent({ type: 'data', sessionId, data: JSON.stringify(entry) });
+
+  try {
+    await sdkBridge.sendMessage(session.sessionId, message, images, files);
+  } catch (e) {
+    console.error('[Cowork] sendMessage bridge error:', e.message);
+    emitLocalAgentEvent({
+      type: 'data', sessionId: session.sessionId,
+      data: JSON.stringify({ role: 'assistant', content: [{ type: 'text', text: `[Error processing message: ${e.message}]` }] }),
+    });
   }
 });
 
@@ -799,6 +1272,13 @@ registerEipcHandler('LocalAgentModeSessions_$_getSession', async (_event, sessio
 
 registerEipcHandler('LocalAgentModeSessions_$_getAll', async () => {
   const sessions = Array.from(localAgentSessions.values());
+  // Ensure every session has a valid conversationUuid before returning
+  for (const session of sessions) {
+    if (!session.conversationUuid || session.conversationUuid.startsWith('local_')) {
+      session.conversationUuid = deriveConversationUuid(session.sessionId);
+      session.uuid = session.sessionId;
+    }
+  }
   return sessions;
 });
 
@@ -925,9 +1405,32 @@ registerEipcHandler('Account_$_setAccountDetails', async () => ({
 }));
 
 // ===== Auth (OAuth browser flow) =====
+// OAUTH COMPLIANCE: This handler only opens the Anthropic OAuth URL in the
+// user's browser. It does not intercept, capture, or process any callback.
+// URL origin validation ensures only Anthropic domains are opened.
+const ALLOWED_AUTH_ORIGINS = [
+  'https://claude.ai',
+  'https://auth.anthropic.com',
+  'https://accounts.anthropic.com',
+  'https://console.anthropic.com',
+];
+
 registerEipcHandler('Auth_$_doAuthInBrowser', async (_event, url) => {
   if (typeof url !== 'string' || url.length === 0) {
     throw new Error('Invalid url');
+  }
+
+  // SECURITY: Validate URL points to an Anthropic domain
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch (_) {
+    throw new Error('Malformed URL');
+  }
+  const origin = parsedUrl.origin;
+  if (!ALLOWED_AUTH_ORIGINS.includes(origin)) {
+    console.warn(`[Auth] Blocked non-Anthropic auth URL: ${origin}`);
+    throw new Error('Auth URL origin not in allowlist: ' + origin);
   }
 
   // SECURITY: only allow URL opens, never shell-evaluate
@@ -970,6 +1473,14 @@ try {
   console.log('[IPC] Registered: connect-to-mcp-server');
 } catch (e) { /* ignore duplicates */ }
 
+try {
+  ipcMain.handle('request-open-mcp-settings', async () => {
+    console.log('[IPC] request-open-mcp-settings called (no-op)');
+    return { success: true };
+  });
+  console.log('[IPC] Registered: request-open-mcp-settings');
+} catch (e) { /* ignore duplicates */ }
+
 console.log('[IPC] All Cowork handlers registered');
 
 // ============================================================
@@ -977,14 +1488,9 @@ console.log('[IPC] All Cowork handlers registered');
 // ============================================================
 
 process.on('uncaughtException', (error) => {
-  if (error.message && (
-    error.message.includes('is not a function') ||
-    error.message.includes('No handler registered')
-  )) {
-    console.error('[Error] Caught:', error.message);
-    return;
-  }
-  throw error;
+  console.error('[uncaughtException]', error.message || error);
+  // Don't re-throw -- let the process survive.
+  // IPC errors are handled per-handler (see registerEipcHandler), so this is a last-resort log.
 });
 
 // ============================================================

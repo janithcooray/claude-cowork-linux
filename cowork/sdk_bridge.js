@@ -18,6 +18,44 @@ const fs = require("fs");
 const LOG = "[sdk-bridge]";
 
 // ---------------------------------------------------------------------------
+//  OAUTH COMPLIANCE: Environment variable allowlist
+//
+//  Only these variables are forwarded to Claude Code subprocesses.
+//  This prevents inadvertent leakage of OAuth tokens, session cookies,
+//  or other credentials that may exist in the Electron main process env.
+//  Authentication is handled independently by Claude Code CLI itself.
+// ---------------------------------------------------------------------------
+
+const SDK_ENV_ALLOWLIST = [
+  // System essentials
+  'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL', 'LC_CTYPE',
+  // XDG directories
+  'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+  // Display (needed for any GUI interactions)
+  'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS',
+  // Node/Electron
+  'NODE_ENV', 'ELECTRON_RUN_AS_NODE',
+  // Claude-specific (user-configured, not OAuth)
+  'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_PATH',
+  // Debug
+  'CLAUDE_COWORK_DEBUG', 'CLAUDE_COWORK_TRACE_IO',
+];
+
+function filterEnvForSubprocess(baseEnv, extra) {
+  const filtered = {};
+  for (const key of SDK_ENV_ALLOWLIST) {
+    if (baseEnv[key] !== undefined) {
+      filtered[key] = baseEnv[key];
+    }
+  }
+  if (extra) {
+    Object.assign(filtered, extra);
+  }
+  return filtered;
+}
+
+// ---------------------------------------------------------------------------
 //  Resolve claude binary
 // ---------------------------------------------------------------------------
 
@@ -135,21 +173,32 @@ class CoworkSDKBridge {
   /**
    * Initialize a session. Dispatches system init event via emitFn.
    * If session.info?.message exists, sends the initial message immediately.
+   *
+   * @param {string} sessionId
+   * @param {object} session - Session info (cwd, model, systemPrompt, etc.)
+   * @param {function} emitFn - Event dispatcher
+   * @param {object} [opts] - Options
+   * @param {function} [opts.onConversationId] - Called when CLI conversation ID is captured
    */
-  async startSession(sessionId, session, emitFn) {
+  async startSession(sessionId, session, emitFn, opts = {}) {
     console.log(`${LOG} startSession ${sessionId}`);
     const state = {
       transcript: [],
-      ccConversationId: null,
+      ccConversationId: session.ccConversationId || null,
       cwd: session.cwd || session.workingDirectory || process.cwd(),
       model: session.model || null,
       systemPrompt: session.systemPrompt || null,
+      claudeConfigDir: session.claudeConfigDir || null,
       messageQueue: [],
       isProcessing: false,
       activeProcess: null,
       emitFn,
+      onConversationId: opts.onConversationId || null,
     };
     this._sessions.set(sessionId, state);
+    if (state.ccConversationId) {
+      console.log(`${LOG} restored ccConversationId for ${sessionId}: ${state.ccConversationId}`);
+    }
 
     // Dispatch init events
     emitFn({ type: "system", sessionId, initializationStatus: "initializing" });
@@ -202,13 +251,15 @@ class CoworkSDKBridge {
       console.error(`${LOG} execMessage error:`, err.message);
       state.emitFn({ type: "error", sessionId, error: err.message });
     } finally {
-      state.isProcessing = false;
-      // Process next queued message
+      // Process next queued message before setting isProcessing = false
+      // This prevents concurrent execution of messages for the same session
       if (state.messageQueue.length > 0) {
         const next = state.messageQueue.shift();
         this.sendMessage(sessionId, next.message)
           .then(next.resolve)
           .catch(next.reject);
+      } else {
+        state.isProcessing = false;
       }
     }
   }
@@ -224,6 +275,10 @@ class CoworkSDKBridge {
     if (files && files.length > 0) {
       const fileRefs = files.map((f) => {
         const filePath = f.path || f.filePath || f.name || "(unknown)";
+        // Validate file existence (informational only, don't block)
+        if (filePath !== "(unknown)" && !fs.existsSync(filePath)) {
+          console.warn(`${LOG} Attached file does not exist: ${filePath}`);
+        }
         return `  - ${filePath}`;
       });
       parts.push(`[Attached files]\n${fileRefs.join("\n")}`);
@@ -233,6 +288,10 @@ class CoworkSDKBridge {
     if (images && images.length > 0) {
       const imgRefs = images.map((img) => {
         const imgPath = img.path || img.filePath || img.name || "(image)";
+        // Validate image existence (informational only, don't block)
+        if (imgPath !== "(image)" && !fs.existsSync(imgPath)) {
+          console.warn(`${LOG} Attached image does not exist: ${imgPath}`);
+        }
         return `  - ${imgPath}`;
       });
       parts.push(`[Attached images]\n${imgRefs.join("\n")}`);
@@ -261,6 +320,11 @@ class CoworkSDKBridge {
     }
   }
 
+  /** Check if the bridge has an active session state for this ID. */
+  hasSession(sessionId) {
+    return this._sessions.has(sessionId);
+  }
+
   getTranscript(sessionId) {
     const state = this._sessions.get(sessionId);
     if (!state) return [];
@@ -280,10 +344,17 @@ class CoworkSDKBridge {
       if (state.systemPrompt) args.push("--system-prompt", state.systemPrompt);
       if (state.ccConversationId) args.push("--resume", state.ccConversationId);
 
-      const env = {
-        ...process.env,
-        CLAUDE_CODE_SESSION_ID: sessionId,
-      };
+      // OAUTH COMPLIANCE: Only pass allowlisted env vars to subprocess.
+      // This prevents OAuth tokens or session credentials in the Electron
+      // process env from leaking to Claude Code. Claude Code authenticates
+      // independently via its own `claude login` flow.
+      const extra = { CLAUDE_CODE_SESSION_ID: sessionId };
+      // Point the CLI at the session-specific .claude directory so transcripts
+      // (and other per-project data) are written where the asar expects them.
+      if (state.claudeConfigDir) {
+        extra.CLAUDE_CONFIG_DIR = state.claudeConfigDir;
+      }
+      const env = filterEnvForSubprocess(process.env, extra);
 
       console.log(`${LOG} spawn: ${this._claudeCmd} --print - --output-format stream-json${state.ccConversationId ? " --resume " + state.ccConversationId : ""} (${message.length} chars via stdin)`);
 
@@ -359,6 +430,10 @@ class CoworkSDKBridge {
       if (ccId) {
         state.ccConversationId = ccId;
         console.log(`${LOG} captured conversationId: ${ccId}`);
+        // Notify caller so it can persist the ID for session resume
+        if (typeof state.onConversationId === "function") {
+          try { state.onConversationId(sessionId, ccId); } catch (_) { /* non-critical */ }
+        }
       }
     }
 
