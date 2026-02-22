@@ -215,7 +215,7 @@ get_dmg() {
 
     # Wait for download to finish (file size must stabilize)
     log_info "Waiting for download to complete..."
-    local prev_size=-1 curr_size=0
+    local prev_size=-1 curr_size=0 stab_elapsed=0 stab_timeout=300
     while true; do
         curr_size=$(stat -c%s "$found" 2>/dev/null || echo 0)
         if [[ "$prev_size" -eq "$curr_size" && "$curr_size" -gt 0 \
@@ -224,6 +224,10 @@ get_dmg() {
         fi
         prev_size=$curr_size
         sleep 3
+        stab_elapsed=$((stab_elapsed + 3))
+        if [[ "$stab_elapsed" -ge "$stab_timeout" ]]; then
+            die "Download did not stabilize within 5 minutes. File: $found ($(format_size "$curr_size"))"
+        fi
     done
     log_success "Download complete: $(format_size "$curr_size")"
     cp "$found" "$dmg_path"
