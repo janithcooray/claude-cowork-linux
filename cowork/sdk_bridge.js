@@ -42,6 +42,9 @@ const SDK_ENV_ALLOWLIST = [
   'CLAUDE_COWORK_DEBUG', 'CLAUDE_COWORK_TRACE_IO',
 ];
 
+// extra is an internal-only object built by this module (never from external
+// input), so it is merged without additional filtering. Call sites must not
+// pass user-supplied or renderer-supplied data via extra.
 function filterEnvForSubprocess(baseEnv, extra) {
   const filtered = {};
   for (const key of SDK_ENV_ALLOWLIST) {

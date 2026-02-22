@@ -43,4 +43,5 @@ exec ./squashfs-root/usr/lib/node_modules/electron/dist/electron \
   "./${ASAR_FILE}" \
   --no-sandbox \
   --password-store=gnome-libsecret \
+  "$@" \
   2>&1 | tee -a ~/.local/share/claude-cowork/logs/startup.log

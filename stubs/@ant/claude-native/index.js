@@ -181,6 +181,22 @@ class AuthRequest extends EventEmitter {
   }
 
   start(url, _callbackUrl) {
+    // SECURITY: Validate URL is an Anthropic OAuth origin before opening
+    const ALLOWED_AUTH_ORIGINS = [
+      'https://claude.ai', 'https://auth.anthropic.com',
+      'https://accounts.anthropic.com', 'https://console.anthropic.com',
+    ];
+    let parsedUrl;
+    try { parsedUrl = new URL(url); } catch (_) {
+      this.emit('error', new Error('Malformed auth URL'));
+      return;
+    }
+    if (!ALLOWED_AUTH_ORIGINS.includes(parsedUrl.origin)) {
+      console.error('[claude-native] Blocked non-Anthropic auth URL:', parsedUrl.origin);
+      this.emit('error', new Error('Auth URL origin not in allowlist: ' + parsedUrl.origin));
+      return;
+    }
+
     // SECURITY: Use execFile (not exec) to prevent command injection
     const { execFile } = require('child_process');
     execFile('xdg-open', [url], (err) => {

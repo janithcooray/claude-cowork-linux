@@ -74,6 +74,14 @@ claude-launcher-fixed.sh
 # Internal docs (may contain paths, session IDs, etc.)
 docs/plans/
 docs/logs/
+docs/ARCHITECTURE.md
+ARCHITECTURE.md
+auth_code_reference.txt
+auth_findings_summary.md
+
+# Local Claude Code config (session notes, local settings)
+.claude/session-resume.md
+.claude/settings.local.json
 
 # OS files
 .DS_Store

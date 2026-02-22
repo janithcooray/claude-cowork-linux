@@ -96,11 +96,15 @@ const ENV_ALLOWLIST = [
   'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'
 ];
 
-// OAUTH COMPLIANCE: Pattern to detect env var keys that may carry credentials.
-// These are blocked from being forwarded to subprocesses even if the
-// Claude Desktop renderer includes them in additionalEnv, ensuring that
-// OAuth tokens never transit through this compatibility layer.
-const BLOCKED_ENV_KEY_PATTERN = /oauth|bearer|token|refresh|secret|credential|session_?cookie/i;
+// OAUTH COMPLIANCE: Pattern to detect env var keys that specifically carry
+// OAuth/bearer credentials. These are blocked from being forwarded to
+// subprocesses even if the Claude Desktop renderer includes them in
+// additionalEnv, ensuring OAuth tokens never transit this compatibility layer.
+//
+// Deliberately narrow: generic terms like "token" and "secret" are omitted to
+// avoid blocking legitimate provider credentials (e.g., AWS_SECRET_ACCESS_KEY,
+// AWS_SESSION_TOKEN) in Bedrock/Vertex configurations.
+const BLOCKED_ENV_KEY_PATTERN = /oauth[_.]?token|bearer[_.]?token|session_?cookie|ANTHROPIC_AUTH_TOKEN/i;
 
 // Keys that must pass through filterEnv even though they match the pattern above.
 // CLAUDE_CODE_OAUTH_TOKEN is the legitimate auth mechanism — the CLI needs it.
