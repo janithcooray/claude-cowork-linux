@@ -658,6 +658,107 @@ registerEipcHandler('FileSystem_$_whichApplication', async () => {
   return null;
 });
 
+/**
+ * Read local file for Cowork sessions.
+ * Called by webapp to load files from session mount points for preview.
+ * Returns: { content: string, mimeType?: string, encoding?: 'base64'|'utf8' }
+ */
+registerEipcHandler('FileSystem_$_readLocalFile', async (_event, filePath) => {
+  console.log('[IPC] FileSystem_$_readLocalFile:', filePath);
+  try {
+    // Resolve symlinks to get the real path
+    let resolvedPath = filePath;
+    try {
+      resolvedPath = fs.realpathSync(filePath);
+    } catch (_) {
+      // If realpath fails, try the original path
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(resolvedPath)) {
+      console.error('[IPC] FileSystem_$_readLocalFile: file not found:', resolvedPath);
+      throw new Error(`File not found: ${filePath}`);
+    }
+
+    const stats = fs.statSync(resolvedPath);
+
+    // Check if it's a directory
+    if (stats.isDirectory()) {
+      console.log('[IPC] FileSystem_$_readLocalFile: path is a directory');
+      // For directories, return a listing
+      const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
+      const listing = entries.map(e => ({
+        name: e.name,
+        isDirectory: e.isDirectory(),
+        isFile: e.isFile(),
+      }));
+      return {
+        content: JSON.stringify(listing, null, 2),
+        mimeType: 'application/json',
+        encoding: 'utf8',
+        isDirectory: true,
+      };
+    }
+
+    // Determine if file is likely binary
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const textExtensions = [
+      '.txt', '.md', '.json', '.js', '.ts', '.jsx', '.tsx', '.html', '.css',
+      '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp',
+      '.xml', '.yaml', '.yml', '.toml', '.ini', '.conf', '.sh', '.bash',
+      '.zsh', '.fish', '.sql', '.graphql', '.env', '.gitignore', '.dockerfile',
+      '.makefile', '.cmake', '.gradle', '.properties', '.log', '.csv',
+    ];
+    const isTextFile = textExtensions.includes(ext) || stats.size < 1024 * 100; // < 100KB likely text
+
+    // Read file content
+    const content = fs.readFileSync(resolvedPath);
+
+    // Check if content appears to be binary
+    const isBinary = !isTextFile || content.includes(0);
+
+    // Determine MIME type
+    const mimeTypes = {
+      '.txt': 'text/plain',
+      '.md': 'text/markdown',
+      '.json': 'application/json',
+      '.js': 'text/javascript',
+      '.ts': 'text/typescript',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.py': 'text/x-python',
+      '.go': 'text/x-go',
+      '.rs': 'text/x-rust',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+    };
+    const mimeType = mimeTypes[ext] || (isBinary ? 'application/octet-stream' : 'text/plain');
+
+    if (isBinary) {
+      return {
+        content: content.toString('base64'),
+        mimeType,
+        encoding: 'base64',
+        size: stats.size,
+      };
+    } else {
+      return {
+        content: content.toString('utf8'),
+        mimeType,
+        encoding: 'utf8',
+        size: stats.size,
+      };
+    }
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_readLocalFile error:', e.message);
+    throw e;
+  }
+});
+
 // ===== AppConfig - Application configuration =====
 registerEipcHandler('AppConfig_$_getAppConfig', async () => ({
   claudeAiUrl: 'https://claude.ai',
