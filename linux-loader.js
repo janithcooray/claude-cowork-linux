@@ -658,6 +658,142 @@ registerEipcHandler('FileSystem_$_whichApplication', async () => {
   return null;
 });
 
+/**
+ * Read local file for Cowork sessions.
+ * Called by webapp to load files from session mount points for preview.
+ * Returns: { content: string, mimeType?: string, encoding?: 'base64'|'utf8' }
+ *
+ * SECURITY: Path is validated against allowed base dirs (session mounts + asar
+ * session storage) after symlink resolution to prevent arbitrary file read.
+ */
+const MAX_PREVIEW_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// Lazy — constants are defined later in module scope
+let _allowedReadBases;
+function getAllowedReadBases() {
+  if (!_allowedReadBases) {
+    _allowedReadBases = [
+      IPC_HANDLER_STATE_DIR, // ~/Library/Application Support/Claude/LocalAgentModeSessions
+      LOCAL_AGENT_STATE_DIR, // ~/.config/Claude/LocalAgentModeSessions
+      ASAR_SESSIONS_BASE,    // ~/.config/Claude/local-agent-mode-sessions
+      path.join(os.homedir(), '.local', 'share', 'claude-cowork'), // legacy session dir
+    ];
+  }
+  return _allowedReadBases;
+}
+
+function isReadPathAllowed(resolvedPath) {
+  return getAllowedReadBases().some(base => {
+    const normalBase = path.resolve(base) + path.sep;
+    return resolvedPath === path.resolve(base) || resolvedPath.startsWith(normalBase);
+  });
+}
+
+registerEipcHandler('FileSystem_$_readLocalFile', async (_event, filePath) => {
+  console.log('[IPC] FileSystem_$_readLocalFile:', filePath);
+  try {
+    // Resolve symlinks to get the real path
+    let resolvedPath;
+    try {
+      resolvedPath = fs.realpathSync(filePath);
+    } catch (_) {
+      resolvedPath = path.resolve(filePath);
+    }
+
+    // SECURITY: Reject paths outside allowed session directories
+    if (!isReadPathAllowed(resolvedPath)) {
+      console.error('[IPC] FileSystem_$_readLocalFile: path outside allowed dirs:', resolvedPath);
+      throw new Error('Access denied: path outside session directories');
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(resolvedPath)) {
+      console.error('[IPC] FileSystem_$_readLocalFile: file not found:', resolvedPath);
+      throw new Error(`File not found: ${filePath}`);
+    }
+
+    const stats = fs.statSync(resolvedPath);
+
+    // Check if it's a directory
+    if (stats.isDirectory()) {
+      const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
+      const listing = entries.map(e => ({
+        name: e.name,
+        isDirectory: e.isDirectory(),
+        isFile: e.isFile(),
+      }));
+      return {
+        content: JSON.stringify(listing, null, 2),
+        mimeType: 'application/json',
+        encoding: 'utf8',
+        isDirectory: true,
+      };
+    }
+
+    // Reject files over size cap
+    if (stats.size > MAX_PREVIEW_SIZE) {
+      throw new Error(`File too large for preview (${(stats.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_PREVIEW_SIZE / 1024 / 1024} MB)`);
+    }
+
+    // Determine if file is text by extension or basename
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const basename = path.basename(resolvedPath).toLowerCase();
+    const textExtensions = new Set([
+      '.txt', '.md', '.json', '.js', '.ts', '.jsx', '.tsx', '.html', '.css',
+      '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp',
+      '.xml', '.yaml', '.yml', '.toml', '.ini', '.conf', '.sh', '.bash',
+      '.zsh', '.fish', '.sql', '.graphql', '.log', '.csv', '.env',
+    ]);
+    const textBasenames = new Set([
+      'dockerfile', 'makefile', 'cmakelists.txt', 'gemfile', 'rakefile',
+      'procfile', '.gitignore', '.gitattributes', '.editorconfig',
+      '.dockerignore', '.eslintrc', '.prettierrc', '.babelrc',
+    ]);
+    const isKnownText = textExtensions.has(ext) || textBasenames.has(basename);
+
+    // Read file content
+    const content = fs.readFileSync(resolvedPath);
+
+    // Check for NUL bytes to detect binary (only in first 8KB for perf)
+    const sampleLen = Math.min(content.length, 8192);
+    let hasNul = false;
+    for (let i = 0; i < sampleLen; i++) {
+      if (content[i] === 0) { hasNul = true; break; }
+    }
+    const isBinary = hasNul && !isKnownText;
+
+    // Determine MIME type
+    const mimeTypes = {
+      '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json',
+      '.js': 'text/javascript', '.ts': 'text/typescript', '.html': 'text/html',
+      '.css': 'text/css', '.py': 'text/x-python', '.go': 'text/x-go',
+      '.rs': 'text/x-rust', '.png': 'image/png', '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+    };
+    const mimeType = mimeTypes[ext] || (isBinary ? 'application/octet-stream' : 'text/plain');
+
+    if (isBinary) {
+      return {
+        content: content.toString('base64'),
+        mimeType,
+        encoding: 'base64',
+        size: stats.size,
+      };
+    } else {
+      return {
+        content: content.toString('utf8'),
+        mimeType,
+        encoding: 'utf8',
+        size: stats.size,
+      };
+    }
+  } catch (e) {
+    console.error('[IPC] FileSystem_$_readLocalFile error:', e.message);
+    throw e;
+  }
+});
+
 // ===== AppConfig - Application configuration =====
 registerEipcHandler('AppConfig_$_getAppConfig', async () => ({
   claudeAiUrl: 'https://claude.ai',
