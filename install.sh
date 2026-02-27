@@ -383,7 +383,7 @@ install_stubs() {
     cp "$native_src" "$target_dir/node_modules/@ant/claude-native/index.js"
 
     # Copy frame-fix files if present in repo
-    for f in frame-fix-wrapper.js frame-fix-entry.js ipc-handler-setup.js; do
+    for f in frame-fix-wrapper.js frame-fix-entry.js; do
         if [[ -f "$INSTALL_DIR/stubs/frame-fix/$f" ]]; then
             cp "$INSTALL_DIR/stubs/frame-fix/$f" "$target_dir/$f"
         elif [[ -f "$INSTALL_DIR/$f" ]]; then

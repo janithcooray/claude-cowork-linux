@@ -6,14 +6,14 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Resolve electron binary: prefer AppImage, fall back to system
-if [[ -x "./squashfs-root/usr/lib/node_modules/electron/dist/electron" ]]; then
-  ELECTRON_BIN="./squashfs-root/usr/lib/node_modules/electron/dist/electron"
-  ASAR_FILE="squashfs-root/usr/lib/node_modules/electron/dist/resources/app.asar"
-elif command -v electron >/dev/null 2>&1; then
+# Resolve electron binary: prefer system electron + local .asar-cache, fall back to AppImage
+if command -v electron >/dev/null 2>&1; then
   ELECTRON_BIN="$(command -v electron)"
   ASAR_FILE=".asar-cache/app.asar"
   mkdir -p ".asar-cache"
+elif [[ -x "./squashfs-root/usr/lib/node_modules/electron/dist/electron" ]]; then
+  ELECTRON_BIN="./squashfs-root/usr/lib/node_modules/electron/dist/electron"
+  ASAR_FILE="squashfs-root/usr/lib/node_modules/electron/dist/resources/app.asar"
 else
   echo "ERROR: No electron binary found. Install electron or place an AppImage in squashfs-root/"
   exit 1
@@ -21,19 +21,12 @@ fi
 
 STUB_FILE="linux-app-extracted/node_modules/@ant/claude-swift/js/index.js"
 STUB_SRC_FILE="stubs/@ant/claude-swift/js/index.js"
-IPC_HANDLER_FILE="linux-app-extracted/ipc-handler-setup.js"
-IPC_HANDLER_SRC_FILE="ipc-handler-setup.js"
 
 # Ensure the extracted app tree has the latest stub baked in before packing.
 # This avoids relying on runtime module interception (ESM import() bypasses Module._load).
 if [ -f "$STUB_SRC_FILE" ]; then
   mkdir -p "$(dirname "$STUB_FILE")"
   cp -f "$STUB_SRC_FILE" "$STUB_FILE"
-fi
-
-# Copy IPC handler setup from tracked source
-if [ -f "$IPC_HANDLER_SRC_FILE" ]; then
-  cp -f "$IPC_HANDLER_SRC_FILE" "$IPC_HANDLER_FILE"
 fi
 
 # ============================================================
@@ -101,7 +94,7 @@ if best_png:
 fi
 
 # Only repack if stub is newer than asar (or asar doesn't exist)
-if [ ! -f "$ASAR_FILE" ] || [ "$STUB_FILE" -nt "$ASAR_FILE" ] || [ "linux-app-extracted/frame-fix-wrapper.js" -nt "$ASAR_FILE" ] || [ "$IPC_HANDLER_SRC_FILE" -nt "$ASAR_FILE" ]; then
+if [ ! -f "$ASAR_FILE" ] || [ "$STUB_FILE" -nt "$ASAR_FILE" ] || [ "linux-app-extracted/frame-fix-wrapper.js" -nt "$ASAR_FILE" ]; then
   echo "Repacking app.asar (stub changed)..."
   asar pack linux-app-extracted "$ASAR_FILE"
 else
