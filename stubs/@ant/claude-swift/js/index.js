@@ -284,6 +284,13 @@ function createMountSymlinks(sessionName, additionalMounts) {
 
     const mountPoint = path.join(mntDir, mountName);
 
+    // Skip asar mounts: on macOS the app path is a directory inside the .app bundle,
+    // but on Linux it's a packed .asar file which Claude Code can't use as a project dir.
+    if (mountName.endsWith('.asar')) {
+      trace('  SKIP: ' + mountName + ' is an asar archive, not a directory (Linux)');
+      continue;
+    }
+
     // Handle special cases
     if (mountName === 'uploads') {
       // On macOS, uploads is a VM shared mount. On Linux (no VM),
@@ -826,19 +833,12 @@ class SwiftAddonStub extends EventEmitter {
           trace('Skipping mount symlink creation: sessionName=' + sessionName + ', hasAdditionalMounts=' + !!additionalMounts);
         }
 
-        // SECURITY: Validate command is the expected Claude binary
-        let hostCommand = command;
-        if (command === '/usr/local/bin/claude') {
-          hostCommand = resolveClaudeBinaryPath();
-          trace('Translated command: ' + command + ' -> ' + hostCommand);
-        } else {
-          // SECURITY: Only allow the expected command
-          trace('SECURITY: Unexpected command blocked: ' + command);
-          if (self._onError) self._onError(id, 'Unexpected command: ' + command, '');
-          return { success: false, error: 'Unexpected command' };
-        }
-
-        // SECURITY: Verify binary exists and is in expected location
+        // SECURITY: Validate and normalize command to the resolved binary.
+        // The asar typically sends /usr/local/bin/claude (the macOS VM path),
+        // but future versions or distro configs may send 'claude' bare or an
+        // absolute path that already exists.  All accepted forms are funneled
+        // through resolveClaudeBinaryPath() so the actual binary on this host
+        // is always what runs.
         const home = os.homedir();
         const allowedPrefixes = [
           path.join(APP_SUPPORT_ROOT, 'claude-code-vm'),
@@ -848,6 +848,38 @@ class SwiftAddonStub extends EventEmitter {
           '/usr/local/bin/',
           '/usr/bin/',
         ];
+
+        const normalizedCommand = (typeof command === 'string' || command instanceof String)
+          ? String(command).trim()
+          : '';
+        const commandBasename = normalizedCommand ? path.basename(normalizedCommand) : '';
+
+        let hostCommand;
+        if (
+          normalizedCommand === '/usr/local/bin/claude' ||
+          normalizedCommand === 'claude' ||
+          commandBasename === 'claude'
+        ) {
+          // Standard paths -- resolve to the real host binary
+          hostCommand = resolveClaudeBinaryPath();
+          trace('Translated command: ' + normalizedCommand + ' -> ' + hostCommand);
+        } else if (allowedPrefixes.some(prefix => normalizedCommand.startsWith(prefix))) {
+          // Already an allowed absolute path -- verify it exists, else resolve
+          if (fs.existsSync(normalizedCommand)) {
+            hostCommand = normalizedCommand;
+            trace('Command is an allowed absolute path: ' + normalizedCommand);
+          } else {
+            hostCommand = resolveClaudeBinaryPath();
+            trace('Allowed absolute path missing, resolved: ' + normalizedCommand + ' -> ' + hostCommand);
+          }
+        } else {
+          // SECURITY: Reject anything outside the allowlist
+          trace('SECURITY: Unexpected command blocked: "' + String(command) + '" (type=' + typeof command + ')');
+          if (self._onError) self._onError(id, 'Unexpected command: ' + String(command), '');
+          return { success: false, error: 'Unexpected command' };
+        }
+
+        // SECURITY: Verify resolved binary is in expected location
         const commandIsAllowed = hostCommand === 'claude' ||
           allowedPrefixes.some(prefix => hostCommand.startsWith(prefix));
         if (!commandIsAllowed) {
@@ -874,6 +906,18 @@ class SwiftAddonStub extends EventEmitter {
           }
           return arg;
         });
+
+        // Filter out --add-dir args pointing to .asar files (not valid project dirs on Linux)
+        let filteredArgs = [];
+        for (let i = 0; i < hostArgs.length; i++) {
+          if (hostArgs[i] === '--add-dir' && i + 1 < hostArgs.length && hostArgs[i + 1].endsWith('.asar')) {
+            trace('Filtered out --add-dir for asar: ' + hostArgs[i + 1]);
+            i++; // skip the next arg too
+            continue;
+          }
+          filteredArgs.push(hostArgs[i]);
+        }
+        hostArgs = filteredArgs;
 
         // Ensure sessions directory exists with secure permissions
         try {
