@@ -861,9 +861,35 @@ registerEipcHandler('ClaudeCode_$_getStatus', async () => ({
   connected: true,
 }));
 
-// CustomPlugins: stub out to prevent "Unexpected command: claude" spawn errors on Linux
+// CustomPlugins: read plugin data directly from CLI rather than spawning via VM
 registerEipcHandler('CustomPlugins_$_listMarketplaces', async () => []);
-registerEipcHandler('CustomPlugins_$_listAvailablePlugins', async () => []);
+registerEipcHandler('CustomPlugins_$_listAvailablePlugins', async () => {
+  const { execFile } = require('child_process');
+  const claudeBin = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
+  return new Promise((resolve) => {
+    execFile(claudeBin, ['plugin', 'list', '--available', '--json'], { timeout: 30000 }, (err, stdout) => {
+      if (err || !stdout) {
+        console.log('[IPC] CustomPlugins listAvailablePlugins: CLI error, returning empty list');
+        return resolve([]);
+      }
+      try {
+        const { available = [], installed = [] } = JSON.parse(stdout);
+        const installedIds = new Set(installed.map(p => p.id));
+        const plugins = available.map(p => ({
+          id: p.pluginId,
+          name: p.name,
+          description: p.description,
+          marketplaceName: p.marketplaceName,
+          isInstalled: installedIds.has(p.pluginId),
+        }));
+        resolve(plugins);
+      } catch (e) {
+        console.log('[IPC] CustomPlugins listAvailablePlugins: parse error:', e.message);
+        resolve([]);
+      }
+    });
+  });
+});
 
 // ===== BrowserNavigation - Navigation state =====
 registerEipcHandler('BrowserNavigation_$_navigationState_$store$_getState', async () => ({
