@@ -861,8 +861,9 @@ registerEipcHandler('ClaudeCode_$_getStatus', async () => ({
   connected: true,
 }));
 
-// CustomPlugins platform check throws "Unsupported platform: linux-x64" without this
+// CustomPlugins: stub out to prevent "Unexpected command: claude" spawn errors on Linux
 registerEipcHandler('CustomPlugins_$_listMarketplaces', async () => []);
+registerEipcHandler('CustomPlugins_$_listAvailablePlugins', async () => []);
 
 // ===== BrowserNavigation - Navigation state =====
 registerEipcHandler('BrowserNavigation_$_navigationState_$store$_getState', async () => ({
