@@ -205,6 +205,12 @@ function resolveClaudeBinaryPath() {
     path.join(home, '.npm-global/bin/claude'),
     '/usr/local/bin/claude',
     '/usr/bin/claude',
+    // Linuxbrew
+    '/home/linuxbrew/.linuxbrew/bin/claude',
+    path.join(home, '.linuxbrew/bin/claude'),
+    // Version managers (mise, asdf)
+    path.join(home, '.local/share/mise/shims/claude'),
+    path.join(home, '.asdf/shims/claude'),
   ];
   for (const candidate of linuxCandidates) {
     try {
@@ -478,7 +484,17 @@ class SwiftAddonStub extends EventEmitter {
       isVisible: () => false,
       submit: (data) => {
         console.log('[claude-swift] quickAccess.submit()', data);
-      }
+      },
+      overlay: {
+        show: () => { trace('quickAccess.overlay.show()'); },
+        hide: () => { trace('quickAccess.overlay.hide()'); },
+        isVisible: () => false,
+      },
+      dictation: {
+        start: () => { trace('quickAccess.dictation.start()'); },
+        stop: () => { trace('quickAccess.dictation.stop()'); },
+        isActive: () => false,
+      },
     };
 
     // Notifications
@@ -712,7 +728,11 @@ class SwiftAddonStub extends EventEmitter {
     };
 
     // API object (general purpose)
-    this.api = {};
+    this.api = {
+      setCredentials: (creds) => {
+        trace('api.setCredentials() called');
+      },
+    };
 
     // Midnight Owl (scheduling/time-based features)
     this.midnightOwl = {
