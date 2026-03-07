@@ -1,0 +1,83 @@
+name: Bug Report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: run `./install.sh --doctor` (or `claude-desktop --doctor`) and check the [Troubleshooting](https://github.com/johnzfitch/claude-cowork-linux#-troubleshooting) section.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install / setup
+        - Launch (app won't start)
+        - Auth / login
+        - Cowork session (spawn / spawn fails)
+        - Transcript / session persistence
+        - Path translation
+        - Keyring / password store
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect vs. what actually occurred?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ./launch.sh
+        2. Click "New session"
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Paste from `~/Library/Application Support/Claude/logs/claude-swift-trace.log`
+        or `./launch.sh 2>&1 | tee /tmp/cowork.log`. Redact any tokens or credentials.
+      render: shell
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distro and desktop environment
+      placeholder: "e.g. Arch Linux / Hyprland (Wayland)"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: claude-cowork-linux version / commit
+      placeholder: "e.g. v3.0.3 or git rev (git rev-parse --short HEAD)"
+    validations:
+      required: true
+
+  - type: input
+    id: claude_version
+    attributes:
+      label: Claude Desktop version (app.asar)
+      placeholder: "e.g. 1.1.4010 — check PKGBUILD or ./install.sh output"
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I ran `./install.sh --doctor` and included its output if relevant
+        - label: I checked the log file and redacted any tokens before pasting
+        - label: I searched existing issues and this isn't a duplicate

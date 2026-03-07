@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Claude Desktop support (auth, billing, account)
+    url: https://support.anthropic.com
+    about: Issues with your Claude account, subscription, or Claude Desktop itself belong here — not in this repo.
+  - name: Claude Code CLI issues
+    url: https://github.com/anthropics/claude-code/issues
+    about: Bugs in the Claude Code CLI binary (not the Linux compatibility layer).
+  - name: Troubleshooting guide
+    url: https://github.com/johnzfitch/claude-cowork-linux#-troubleshooting
+    about: Check here before filing — common issues are documented.
