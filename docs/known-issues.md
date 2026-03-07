@@ -59,7 +59,7 @@ The rules provide:
 
 1. Disable GPU acceleration:
    ```bash
-   electron --disable-gpu /Applications/Claude.app/Contents/Resources/linux-loader.js
+   claude-desktop --disable-gpu
    ```
 
 2. Try software rendering:
@@ -83,7 +83,7 @@ The rules provide:
 **Solutions**:
 - Subsequent starts should be faster
 - Check network connectivity if stuck on loading
-- Review `~/Library/Logs/Claude/startup.log` for bottlenecks
+- Review `~/.local/share/claude-cowork/logs/startup.log` for bottlenecks
 
 ---
 
@@ -152,7 +152,7 @@ The rules provide:
 If you encounter issues not listed here:
 
 1. Check logs:
-   - `~/Library/Logs/Claude/startup.log` - Launch issues
+   - `~/.local/share/claude-cowork/logs/startup.log` - Launch issues
    - `~/.local/share/claude-cowork/logs/claude-swift-trace.log` - Stub issues
 
 2. Enable debug mode:

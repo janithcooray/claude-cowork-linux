@@ -187,7 +187,7 @@ This makes the server think we're on macOS 14 (Sonoma), enabling Cowork features
 <details>
 <summary><strong>2. Platform Gate Bypass</strong></summary>
 
-The platform-gate function (minified name changes per build — `xPt()` in v1.1.3963, `wj()` in older builds) checks if Cowork is supported. `patches/enable-cowork.py` finds it automatically and replaces it to unconditionally return `{status: "supported"}`.
+The platform-gate function (minified name changes per build — `xPt()` in v1.1.3963, `wj()` in older builds) checks if Cowork is supported. `enable-cowork.py` finds it automatically and replaces it to unconditionally return `{status: "supported"}`.
 
 </details>
 
@@ -225,6 +225,10 @@ $CLAUDE_CODE_PATH                                    (explicit override)
 ~/.npm-global/bin/claude
 /usr/local/bin/claude
 /usr/bin/claude
+/home/linuxbrew/.linuxbrew/bin/claude               (Linuxbrew system)
+~/.linuxbrew/bin/claude                              (Linuxbrew user)
+~/.local/share/mise/shims/claude                     (mise version manager)
+~/.asdf/shims/claude                                 (asdf version manager)
 ```
 
 </details>
@@ -244,10 +248,6 @@ claude-cowork-linux/
 ├── cowork/
 │   ├── event_dispatch.js               # EIPC event dispatch for LocalAgentModeSessions
 │   └── sdk_bridge.js                   # SDK bridge (spawn dead code, kept for session state)
-├── tools/
-│   └── fetch-dmg.py                    # Auto-download Claude DMG via rnet (Cloudflare bypass)
-├── patches/
-│   └── enable-cowork.py                # Patches platform gate to return {status:"supported"}
 ├── docs/
 │   ├── extensions.md                   # MCP and Chrome Extension integration overview
 │   ├── known-issues.md                 # Safe Storage encryption, keyring setup
@@ -255,11 +255,12 @@ claude-cowork-linux/
 ├── config/
 │   └── hyprland/claude.conf            # Optional: Hyprland window rules
 ├── .github/assets/                     # README icons and hero image
-├── linux-loader.js                     # Entry point: platform spoofing, IPC setup, session lifecycle
+├── enable-cowork.py                    # Patches platform gate to return {status:"supported"}
+├── fetch-dmg.py                        # Auto-download Claude DMG via rnet (Cloudflare bypass)
 ├── install.sh                          # Installer + --doctor preflight diagnostics
-├── test-launch.sh                      # Dev launcher: repacks asar, detects password store, runs electron
-├── test-launch-devtools.sh             # Dev launcher with --inspect (Node.js DevTools)
-├── test-flow.sh                        # Env var checks, stub URL validation, log scanning
+├── launch.sh                           # Launcher: repacks asar, detects password store, runs electron
+├── launch-devtools.sh                  # Launcher with --inspect (Node.js DevTools)
+├── validate.sh                         # Env var checks, stub URL validation, log scanning
 ├── PKGBUILD                            # Arch Linux AUR package definition
 ├── OAUTH-COMPLIANCE.md                 # OAuth token handling audit
 ├── CLAUDE.md                           # Project guide and critical paths
@@ -320,7 +321,7 @@ cp -r stubs/@ant/* linux-app-extracted/node_modules/@ant/
 Run the cowork patch (auto-detects the minified function name):
 
 ```bash
-python3 patches/enable-cowork.py linux-app-extracted/.vite/build/index.js
+python3 enable-cowork.py linux-app-extracted/.vite/build/index.js
 ```
 
 </details>
@@ -443,9 +444,9 @@ The app enables `GlobalShortcutsPortal` for Wayland global shortcut support via 
 ## ![](.github/assets/icons/console-24x24.png) Development
 
 ```bash
-./test-launch.sh              # repacks asar automatically if stubs changed
-./test-launch-devtools.sh     # with Node.js inspector
-./test-flow.sh                # env var checks, stub URL validation, log errors
+./launch.sh                   # repacks asar automatically if stubs changed
+./launch-devtools.sh          # with Node.js inspector
+./validate.sh                 # env var checks, stub URL validation, log errors
 ./install.sh --doctor         # preflight: binaries, node, CLI, /sessions, secret service, patches
 ```
 
@@ -465,7 +466,7 @@ export ELECTRON_ENABLE_LOGGING=1
 rm -f ~/.local/share/claude-cowork/logs/claude-swift-trace.log
 
 # Run with output capture
-./test-launch.sh 2>&1 | tee /tmp/claude-full.log
+./launch.sh 2>&1 | tee /tmp/claude-full.log
 
 # In another terminal, watch the trace
 tail -f ~/.local/share/claude-cowork/logs/claude-swift-trace.log
