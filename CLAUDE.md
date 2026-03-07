@@ -11,27 +11,25 @@ Replaces macOS VM + Swift addon with direct process spawning on Linux.
                         │         app.asar (minified)      │
                         └──────────────┬──────────────────┘
                                        │
-              ┌────────────────────────┼────────────────────────┐
-              │                        │                        │
-   ┌──────────▼──────────┐  ┌─────────▼─────────┐  ┌──────────▼──────────┐
-   │   linux-loader.js   │  │ ipc-handler-setup  │  │ Swift Stub (index.js)│
-   │ (bootstrap, spoof,  │  │ (parallel handlers │  │ stubs/@ant/claude-   │
-   │  IPC, sessions.json)│  │  from asar extract)│  │ swift/js/index.js    │
-   └──────────┬──────────┘  └─────────┬─────────┘  └──────────┬──────────┘
-              │                        │                        │
-              │           ┌────────────┘                        │
-              │           │                                     │
-   ┌──────────▼───────────▼──┐                     ┌───────────▼──────────┐
-   │  cowork/sdk_bridge.js   │                     │   vm.spawn() / kill  │
-   │  (dead code for spawn;  │                     │   filterEnv()        │
-   │   kept for bridge state)│                     │   path translation   │
-   └─────────────────────────┘                     └───────────┬──────────┘
-                                                               │
-                                                    ┌──────────▼──────────┐
-                                                    │   Claude Code CLI   │
-                                                    │  (~/.local/bin/     │
-                                                    │        claude)      │
-                                                    └─────────────────────┘
+                       ┌───────────────┴───────────────────┐
+                       │                                   │
+            ┌──────────▼──────────┐             ┌──────────▼──────────┐
+            │  ipc-handler-setup  │             │ Swift Stub (index.js)│
+            │  (IPC handlers,     │             │ stubs/@ant/claude-   │
+            │   session state)    │             │ swift/js/index.js    │
+            └──────────┬──────────┘             └──────────┬──────────┘
+                       │                                   │
+            ┌──────────▼──────────┐             ┌──────────▼──────────┐
+            │  cowork/sdk_bridge  │             │   vm.spawn() / kill  │
+            │  (dead code for     │             │   filterEnv()        │
+            │   spawn; bridge     │             │   path translation   │
+            │   state only)       │             └──────────┬──────────┘
+            └─────────────────────┘                        │
+                                                ┌──────────▼──────────┐
+                                                │   Claude Code CLI   │
+                                                │  (~/.local/bin/     │
+                                                │        claude)      │
+                                                └─────────────────────┘
 ```
 
 **Critical**: The asar's own `LocalAgentModeSessionManager` drives the spawn lifecycle.
@@ -49,11 +47,10 @@ used for spawning. Do not add spawn logic to `sdk_bridge.js` expecting it to run
 | File | Purpose | Modified by us? |
 |------|---------|-----------------|
 | `stubs/@ant/claude-swift/js/index.js` | **THE** critical stub. Replaces macOS Swift VM addon. Handles `vm.spawn()`, `filterEnv()`, path translation, mount symlinks, process I/O | YES — primary |
-| `linux-loader.js` | Electron bootstrap: platform spoofing, IPC handler registration, session lifecycle, `sessions.json` persistence, transcript migration | YES — primary |
+| `linux-app-extracted/ipc-handler-setup.js` | IPC handler implementation baked into the asar. Registers all EIPC handlers, manages session state, `sessions.json` persistence, transcript migration. **Untracked build artifact** — edit via `linux-app-extracted/` then repack | YES — primary |
 | `cowork/sdk_bridge.js` | SDK bridge class. Initializes but **spawn is dead code** — kept for bridge state/transcript/conversation ID extraction | YES — but largely unused |
 | `cowork/event_dispatch.js` | EIPC event dispatch, handler registration | YES — minor |
-| `linux-app-extracted/ipc-handler-setup.js` | Parallel IPC handler implementation extracted from asar. **Untracked build artifact** — changes here must mirror `linux-loader.js` | YES — parallel |
-| `test-launch.sh` | Launch script: `--password-store=gnome-libsecret`, Wayland/Ozone flags, asar repacking | YES |
+| `launch.sh` | Launch script: `--password-store=gnome-libsecret`, Wayland/Ozone flags, asar repacking | YES |
 | `.claude/session-resume.md` | Detailed session-by-session changelog and testing checklist | YES |
 
 ## Critical Path Chains
@@ -132,11 +129,11 @@ resolves via the root `/sessions/` symlink to `~/.local/share/claude-cowork/sess
 SAVE PATH (during session):
   Message sent → CLI returns session_id in stream-json
     → extractConversationId() captures it
-    → onConversationId callback → linux-loader.js saves to session object
+    → onConversationId callback → saves to session object
     → scheduleSave() → writes sessions.json
 
 LOAD PATH (on restart):
-  linux-loader.js startup
+  ipc-handler-setup.js startup
     → loadSessionState() reads sessions.json
     → hydrateSessionPayload() restores localAgentSessions Map
     → ensureAsarClaudeConfigDir() creates .claude/projects/ for each session
@@ -176,7 +173,7 @@ See "Critical: Auth Flow" section below for full details.
 
 ```
 Asar registers handlers via ipcMain.handle():
-  → linux-loader.js intercepts via patched _invokeHandlers.set
+  → ipc-handler-setup.js intercepts via patched _invokeHandlers.set
   → Registers our handler instead of (or alongside) the asar's
   → Handler format: $eipc_message$_<uuid>_$_<namespace>_$_<handlerName>
   → Namespaces: claude.web, claude.hybrid, claude.settings
@@ -229,8 +226,8 @@ and must authenticate via its own `CLAUDE_CODE_OAUTH_TOKEN` code path.
 | Log prefix | Source | Where |
 |------------|--------|-------|
 | `[TRACE]` | Swift stub `trace()` | `~/Library/Application Support/Claude/logs/claude-swift-trace.log` |
-| `[claude-swift]` | Swift stub `console.log()` | stdout (captured by test-launch.sh) |
-| `[Cowork]` | linux-loader.js | stdout |
+| `[claude-swift]` | Swift stub `console.log()` | stdout (captured by launch.sh) |
+| `[Cowork]` | ipc-handler-setup.js | stdout |
 | `[ipc-setup]` | ipc-handler-setup.js | stdout |
 | `[sdk-bridge]` | sdk_bridge.js | stdout |
 | `[MAIN_LOG]` | Asar's main process logger | stdout |
@@ -240,7 +237,7 @@ and must authenticate via its own `CLAUDE_CODE_OAUTH_TOKEN` code path.
 ### Common issues and what to grep for
 
 **"Projects directory not found"** → asar can't find `<sessionDir>/.claude/projects/`.
-Fix: `ensureAsarClaudeConfigDir()` in linux-loader.js creates it.
+Fix: `ensureAsarClaudeConfigDir()` in `ipc-handler-setup.js` creates it.
 
 **"Session file not found for <uuid>"** → asar's `LocalSessionManager.getTranscript()`
 (NOT `LocalAgentModeSessions`) can't find the .jsonl in `~/.claude/projects/`.
@@ -290,17 +287,17 @@ python3 -c "import json; d=json.load(open('$HOME/.config/Claude/LocalAgentModeSe
   of our `sessions.json`. Our IPC handlers intercept all eipc calls so the asar's storage
   is bypassed, but any main-process code that queries the manager directly won't find
   our sessions.
-- `ipc-handler-setup.js` is an untracked build artifact from asar extraction. Changes
-  there must be kept in sync with `linux-loader.js` manually.
+- `ipc-handler-setup.js` is an untracked build artifact from asar extraction. It is the
+  primary IPC handler — edit it directly in `linux-app-extracted/`, then repack via `launch.sh`.
 
 ## Build / Test
 
 ```bash
 # Launch cowork
-./test-launch.sh
+./launch.sh
 
 # Full log capture
-./test-launch.sh 2>&1 | tee ~/cowork-full-log.txt
+./launch.sh 2>&1 | tee ~/cowork-full-log.txt
 
 # Verify transcript path is correct after a session
 grep "Translated envVar CLAUDE_CONFIG_DIR" ~/Library/Application\ Support/Claude/logs/claude-swift-trace.log
@@ -320,7 +317,7 @@ grep "Translated envVar CLAUDE_CONFIG_DIR" ~/Library/Application\ Support/Claude
    CLI use `CLAUDE_CODE_OAUTH_TOKEN` natively.
 
 2. **Projects directory not found** (2026-02-13): `.claude/projects/` didn't exist in session
-   storage dirs. Fix: `ensureAsarClaudeConfigDir()` creates it proactively.
+   storage dirs. Fix: `ensureAsarClaudeConfigDir()` in `ipc-handler-setup.js` creates it proactively.
 
 3. **Transcript path mismatch** (2026-02-13): `CLAUDE_CONFIG_DIR` env var contained a VM-internal
    path (`/sessions/...`) that resolved via the root `/sessions/` symlink to `~/.local/share/...`

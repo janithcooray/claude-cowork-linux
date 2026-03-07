@@ -22,12 +22,19 @@ fi
 STUB_FILE="linux-app-extracted/node_modules/@ant/claude-swift/js/index.js"
 STUB_SRC_FILE="stubs/@ant/claude-swift/js/index.js"
 
-# Ensure the extracted app tree has the latest stub baked in before packing.
+# Ensure the extracted app tree has the latest stubs baked in before packing.
 # This avoids relying on runtime module interception (ESM import() bypasses Module._load).
 if [ -f "$STUB_SRC_FILE" ]; then
   mkdir -p "$(dirname "$STUB_FILE")"
   cp -f "$STUB_SRC_FILE" "$STUB_FILE"
 fi
+
+# Sync frame-fix files so wrapper changes take effect without a full reinstall
+for _ff_file in frame-fix-entry.js frame-fix-wrapper.js; do
+  if [ -f "stubs/frame-fix/$_ff_file" ]; then
+    cp -f "stubs/frame-fix/$_ff_file" "linux-app-extracted/$_ff_file"
+  fi
+done
 
 # ============================================================
 # Linux UI Fixes (applied before every repack)
@@ -101,6 +108,7 @@ echo "Launching Claude Desktop (electron: $ELECTRON_BIN, password-store: $PASSWO
 exec "$ELECTRON_BIN" \
   "./${ASAR_FILE}" \
   --no-sandbox \
+  --disable-gpu \
   --password-store="$PASSWORD_STORE" \
   --enable-features=GlobalShortcutsPortal \
   "$@" \

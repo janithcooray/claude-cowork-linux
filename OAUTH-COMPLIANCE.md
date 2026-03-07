@@ -201,7 +201,7 @@ The `SDK_ENV_ALLOWLIST` contains only system variables, display variables, and C
 
 ### 5. `Auth_$_doAuthInBrowser` — Origin-Validated Browser Open
 
-**File**: `linux-loader.js` (lines 927-957)
+**File**: `stubs/@ant/claude-native/index.js` (lines 185-194)
 
 **What it does**: Opens the OAuth URL in the user's default browser. The URL is validated against an allowlist of Anthropic domains before being opened.
 
@@ -265,7 +265,7 @@ Even though our stubs don't handle tokens, trace logs could theoretically captur
 | `stubs/@ant/claude-swift/js/index.js` | **Our code** | VM emulation for Linux (process spawn, path translation) |
 | `stubs/@ant/claude-native/index.js` | **Our code** | Platform shims (notifications, keyboard, etc.) |
 | `cowork/sdk_bridge.js` | **Our code** | CLI bridge for SDK-mode sessions |
-| `linux-loader.js` | **Our code** | Electron main process bootstrap + IPC handlers |
+| `linux-app-extracted/ipc-handler-setup.js` | **Our code** | IPC handlers, session state, session persistence |
 | `app/.vite/build/index.js` | **Anthropic's code** (3 one-line patches) | Platform gate bypass only |
 | Claude Desktop renderer | **Unmodified** | Handles all OAuth, UI, API communication |
 | Claude Code binary | **Unmodified** | Handles its own authentication |
@@ -290,7 +290,7 @@ grep -n 'filterEnvForSubprocess\|process\.env' cowork/sdk_bridge.js
 grep -n 'isAvailable\|callback\|token' stubs/@ant/claude-native/index.js
 
 # 5. Confirm auth URL origin validation
-grep -n 'ALLOWED_AUTH_ORIGINS' linux-loader.js
+grep -n 'ALLOWED_AUTH_ORIGINS' stubs/@ant/claude-native/index.js
 
 # 6. Confirm log redaction is active
 grep -n 'redactForLogs' stubs/@ant/claude-swift/js/index.js

@@ -298,8 +298,7 @@ function get_app_info_for_file(filePath) {
 // Module initialization
 // ============================================================
 
-// NOTE: IPC handlers are now registered in linux-loader.js setupEipcHandlers()
-// This avoids duplicate registration and ensures correct return values
+// NOTE: IPC handlers are registered in ipc-handler-setup.js (baked into app.asar)
 // registerCriticalHandlers() is no longer called here
 
 log('claude-native stub loaded successfully');

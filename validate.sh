@@ -1,6 +1,6 @@
 #!/bin/bash
-# Claude Desktop Linux - Test Flow
-# Tests the Wayland/GPU fixes and stub refactoring
+# Claude Desktop Linux — Validate
+# Env var checks, stub URL validation, log scanning
 
 set -e
 
@@ -73,7 +73,7 @@ fi
 
 step "4. Script Syntax Check"
 
-for script in test-launch.sh install.sh; do
+for script in launch.sh install.sh; do
     if [[ -f "$script" ]]; then
         if bash -n "$script" 2>/dev/null; then
             pass "$script syntax OK"
@@ -128,7 +128,7 @@ echo ""
 info "Pre-flight checks complete."
 echo ""
 echo "To launch Claude Desktop:"
-echo "  ./test-launch.sh"
+echo "  ./launch.sh"
 echo ""
 echo "Watch for:"
 echo "  - 'Wayland detected' message"
@@ -145,5 +145,5 @@ read -p "Launch now? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     info "Launching Claude Desktop..."
-    exec ./test-launch.sh
+    exec ./launch.sh
 fi

@@ -3,6 +3,7 @@ app
 app/
 app-extracted/
 linux-app-extracted/
+mnt/
 squashfs-root/
 claude-app-*/
 extracted-mac-claude-desktop-*/

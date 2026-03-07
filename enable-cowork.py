@@ -8,10 +8,10 @@ the function by its characteristic return shape and replaces it to
 unconditionally return {status:"supported"}.
 
 Usage:
-    python3 patches/enable-cowork.py <path-to-index.js>
+    python3 enable-cowork.py <path-to-index.js>
 
 Example:
-    python3 patches/enable-cowork.py linux-app-extracted/.vite/build/index.js
+    python3 enable-cowork.py linux-app-extracted/.vite/build/index.js
 """
 
 import sys

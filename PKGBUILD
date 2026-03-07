@@ -55,7 +55,7 @@ pkgver() {
     "$venv_dir/bin/pip" install --quiet "${srcdir}/${_rnet_wheel}" 2>/dev/null
 
     local version
-    version=$("$venv_dir/bin/python" "${srcdir}/claude-cowork-linux/tools/fetch-dmg.py" 2>/dev/null \
+    version=$("$venv_dir/bin/python" "${srcdir}/claude-cowork-linux/fetch-dmg.py" 2>/dev/null \
         | awk '{print $1}')
     rm -rf "$venv_dir"
 
@@ -75,7 +75,7 @@ prepare() {
     # Fetch latest DMG URL via rnet, download with curl
     echo "Fetching latest Claude Desktop DMG URL..."
     local dmg_url
-    dmg_url=$("$venv_dir/bin/python" "${srcdir}/claude-cowork-linux/tools/fetch-dmg.py" --url)
+    dmg_url=$("$venv_dir/bin/python" "${srcdir}/claude-cowork-linux/fetch-dmg.py" --url)
     echo "Downloading DMG from CDN..."
     curl -fSL --progress-bar -o "${srcdir}/Claude.dmg" "$dmg_url"
 
@@ -152,7 +152,7 @@ build() {
 
     # Apply cowork patch
     echo "Applying cowork patch..."
-    python "${_repo}/patches/enable-cowork.py" \
+    python "${_repo}/enable-cowork.py" \
         "${srcdir}/linux-app-extracted/.vite/build/index.js"
 
     # Repack into app.asar
@@ -185,7 +185,9 @@ if ! dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesk
 fi
 
 exec electron /usr/lib/claude-cowork/app.asar \
-    --no-sandbox --password-store="$PW_STORE" \
+    --no-sandbox \
+    --disable-gpu \
+    --password-store="$PW_STORE" \
     --enable-features=GlobalShortcutsPortal "$@"
 EOF
 

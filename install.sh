@@ -146,7 +146,7 @@ install_dependencies() {
 setup_repo() {
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         log_info "Updating existing installation..."
-        git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || log_warn "git pull failed, using existing version"
+        git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || log_info "Local modifications present, using existing version"
         log_success "Repository updated"
     else
         # Remove stale non-git install dir if present
@@ -173,12 +173,12 @@ fetch_dmg_via_rnet() {
     local fetch_script
 
     # Locate fetch-dmg.py (repo clone or running from source)
-    if [[ -f "$INSTALL_DIR/tools/fetch-dmg.py" ]]; then
-        fetch_script="$INSTALL_DIR/tools/fetch-dmg.py"
-    elif [[ -f "$(dirname "$0")/tools/fetch-dmg.py" ]]; then
-        fetch_script="$(dirname "$0")/tools/fetch-dmg.py"
+    if [[ -f "$INSTALL_DIR/fetch-dmg.py" ]]; then
+        fetch_script="$INSTALL_DIR/fetch-dmg.py"
+    elif [[ -f "$(dirname "$0")/fetch-dmg.py" ]]; then
+        fetch_script="$(dirname "$0")/fetch-dmg.py"
     else
-        log_warn "tools/fetch-dmg.py not found, skipping auto-download"
+        log_warn "fetch-dmg.py not found, skipping auto-download"
         return 1
     fi
 
@@ -412,10 +412,17 @@ install_stubs() {
 
 apply_patches() {
     local index_js="$INSTALL_DIR/linux-app-extracted/.vite/build/index.js"
+    local patch_script=""
 
-    if [[ -f "$INSTALL_DIR/patches/enable-cowork.py" && -f "$index_js" ]]; then
+    if [[ -f "$INSTALL_DIR/enable-cowork.py" ]]; then
+        patch_script="$INSTALL_DIR/enable-cowork.py"
+    elif [[ -f "$(dirname "$0")/enable-cowork.py" ]]; then
+        patch_script="$(dirname "$0")/enable-cowork.py"
+    fi
+
+    if [[ -n "$patch_script" && -f "$index_js" ]]; then
         log_info "Applying cowork patch..."
-        python3 "$INSTALL_DIR/patches/enable-cowork.py" "$index_js" || log_warn "Patch may have already been applied"
+        python3 "$patch_script" "$index_js" || log_warn "Patch may have already been applied"
         log_success "Patches applied"
     else
         log_warn "Patch script or index.js not found, skipping patches"
@@ -441,11 +448,11 @@ mkdir -p "\$LOG_DIR"
 cd "\$COWORK_DIR"
 
 case "\${1:-}" in
-    --devtools) shift; exec ./test-launch-devtools.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
-    --debug)    shift; export CLAUDE_TRACE=1; exec ./test-launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
+    --devtools) shift; exec ./launch-devtools.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
+    --debug)    shift; export CLAUDE_TRACE=1; exec ./launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
     --doctor)   exec ./install.sh --doctor ;;
     *)
-        nohup bash -c 'cd "$1" && shift && exec ./test-launch.sh "$@"' \
+        nohup bash -c 'cd "\$1" && shift && exec ./launch.sh "\$@"' \
             -- "\$COWORK_DIR" "\$@" >> "\$LOG_DIR/startup.log" 2>&1 &
         disown
         ;;
