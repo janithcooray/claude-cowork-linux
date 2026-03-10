@@ -214,6 +214,28 @@ Object.defineProperty = function(target, key, descriptor) {
 
 console.log('[Cowork] Linux support enabled - VM will be emulated');
 
+function getSyntheticIPCResponse(channel) {
+  if (typeof channel !== 'string') {
+    return null;
+  }
+  if (channel.includes('ComputerUseTcc_$_getState')) {
+    return async () => ({
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    });
+  }
+  if (channel.includes('ComputerUseTcc_$_requestAccess')) {
+    return async () => ({
+      success: false,
+      accessibility: 'denied',
+      screenCapture: 'denied',
+      canPrompt: false,
+    });
+  }
+  return null;
+}
+
 // ============================================================
 // GRACEFUL SHUTDOWN — on Linux, closing all windows must quit the
 // app. The asar's handler checks `process.platform === "darwin"`
@@ -280,6 +302,21 @@ Module.prototype.require = function(id) {
     if (ipcMain && !global.__coworkIPCPatched) {
       global.__coworkIPCPatched = true;
 
+      const invokeHandlers = ipcMain._invokeHandlers;
+      if (invokeHandlers && !global.__coworkInvokeHandlersPatched) {
+        global.__coworkInvokeHandlersPatched = true;
+        const originalHas = invokeHandlers.has.bind(invokeHandlers);
+        const originalGet = invokeHandlers.get.bind(invokeHandlers);
+        invokeHandlers.has = function(channel) {
+          return originalHas(channel) || !!getSyntheticIPCResponse(channel);
+        };
+        invokeHandlers.get = function(channel) {
+          const existing = originalGet(channel);
+          return existing || getSyntheticIPCResponse(channel);
+        };
+        console.log('[Cowork] _invokeHandlers fallback enabled');
+      }
+
       const originalHandle = ipcMain.handle.bind(ipcMain);
       ipcMain.handle = function(channel, handler) {
         // Filter queue-operation messages from transcripts — unknown type in current webapp
@@ -291,6 +328,12 @@ Module.prototype.require = function(id) {
             }
             return result;
           });
+        }
+
+        const syntheticHandler = getSyntheticIPCResponse(channel);
+        if (syntheticHandler) {
+          console.log(`[Cowork] Intercepting synthetic IPC handler: ${channel}`);
+          return originalHandle(channel, syntheticHandler);
         }
 
         // Intercept ClaudeVM handlers to inject our Linux implementation

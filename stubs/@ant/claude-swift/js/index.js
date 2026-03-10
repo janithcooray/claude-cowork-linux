@@ -371,8 +371,29 @@ function createMountSymlinks(sessionName, additionalMounts) {
             }
             fs.unlinkSync(mountPoint);
           } else if (stat.isDirectory()) {
-            // Replace empty directory with symlink
-            fs.rmdirSync(mountPoint);
+            // Preserve stale uploads contents before replacing with a symlink.
+            for (const entry of fs.readdirSync(mountPoint)) {
+              const sourcePath = path.join(mountPoint, entry);
+              const destPath = path.join(hostUploadsPath, entry);
+              if (fs.existsSync(destPath)) {
+                trace('  Uploads entry already exists at host path, preserving destination: ' + destPath);
+                continue;
+              }
+              try {
+                fs.renameSync(sourcePath, destPath);
+              } catch (moveErr) {
+                // renameSync fails across filesystems (EXDEV); fall back to copy+delete
+                if (moveErr.code === 'EXDEV') {
+                  fs.copyFileSync(sourcePath, destPath);
+                  fs.unlinkSync(sourcePath);
+                } else {
+                  trace('  WARNING: Could not move upload entry ' + entry + ': ' + moveErr.message);
+                }
+              }
+            }
+            fs.rmSync(mountPoint, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(mountPoint);
           }
         }
         fs.symlinkSync(hostUploadsPath, mountPoint);
@@ -523,6 +544,16 @@ function canonicalizeVmPathStrict(vmPath) {
   return canonicalizeHostPath(translateVmPathStrict(vmPath));
 }
 
+// Route VM paths through strict validation+canonicalization, host paths
+// through canonicalizeHostPath. Used by files.* and other surfaces that
+// receive paths from the asar without knowing the path type.
+function canonicalizePathForHostAccess(inputPath) {
+  if (typeof inputPath === 'string' && inputPath.startsWith('/sessions/')) {
+    return canonicalizeVmPathStrict(inputPath);
+  }
+  return canonicalizeHostPath(inputPath);
+}
+
 // For arbitrary host paths from desktop integrations, avoid ancestor walking
 // if the target is missing or inaccessible. Those paths are not crossing the
 // VM boundary, so preserve the original string unless realpath succeeds.
@@ -537,14 +568,22 @@ function canonicalizeResolvableHostPath(hostPath) {
   }
 }
 
-// Route VM paths through strict validation+canonicalization, host paths
-// through canonicalizeHostPath. Used by files.* and other surfaces that
-// receive paths from the asar without knowing the path type.
-function canonicalizePathForHostAccess(inputPath) {
-  if (typeof inputPath === 'string' && inputPath.startsWith('/sessions/')) {
-    return canonicalizeVmPathStrict(inputPath);
+function findNearestExistingAncestor(hostPath) {
+  if (typeof hostPath !== 'string' || hostPath.length === 0) {
+    return hostPath;
   }
-  return canonicalizeHostPath(inputPath);
+  let current = path.isAbsolute(hostPath) ? hostPath : path.resolve(hostPath);
+  while (true) {
+    try {
+      return fs.realpathSync(current);
+    } catch (_) {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return current;
+      }
+      current = parent;
+    }
+  }
 }
 
 // --- writeToProcess structured stdin rewriting ---
@@ -798,8 +837,25 @@ class SwiftAddonStub extends EventEmitter {
         console.log('[claude-swift] desktop.openFile() resolved to:', hostPath);
         try {
           const { execFile } = require('child_process');
-          execFile('xdg-open', [hostPath], (err) => {
-            if (err) console.error('[claude-swift] openFile error:', err.message);
+          let openTarget = hostPath;
+          let fallbackTarget = hostPath;
+          try {
+            const stats = fs.statSync(hostPath);
+            openTarget = canonicalizeResolvableHostPath(hostPath);
+            fallbackTarget = stats.isDirectory()
+              ? openTarget
+              : canonicalizeResolvableHostPath(path.dirname(hostPath));
+          } catch (_) {
+            openTarget = findNearestExistingAncestor(path.dirname(hostPath));
+            fallbackTarget = openTarget;
+          }
+          execFile('xdg-open', [openTarget], (err) => {
+            if (err) {
+              console.error('[claude-swift] openFile error:', err.message);
+              if (fallbackTarget !== openTarget) {
+                execFile('xdg-open', [fallbackTarget], () => {});
+              }
+            }
           });
           return Promise.resolve(true);
         } catch (e) {
@@ -823,14 +879,27 @@ class SwiftAddonStub extends EventEmitter {
         console.log('[claude-swift] desktop.revealFile() resolved to:', hostPath);
         try {
           const { execFile } = require('child_process');
-          const dir = path.dirname(hostPath);
+          let revealDir = hostPath;
           // Try nautilus first (GNOME), fall back to xdg-open
-          execFile('nautilus', ['--select', hostPath], (err) => {
-            if (err) {
-              // Fall back to opening the directory
-              execFile('xdg-open', [dir], () => {});
-            }
-          });
+          let targetIsFile = false;
+          try {
+            const stats = fs.statSync(hostPath);
+            targetIsFile = stats.isFile();
+            revealDir = stats.isDirectory()
+              ? canonicalizeResolvableHostPath(hostPath)
+              : canonicalizeResolvableHostPath(path.dirname(hostPath));
+          } catch (_) {
+            revealDir = findNearestExistingAncestor(path.dirname(hostPath));
+          }
+          if (targetIsFile) {
+            execFile('nautilus', ['--select', hostPath], (err) => {
+              if (err) {
+                execFile('xdg-open', [revealDir], () => {});
+              }
+            });
+          } else {
+            execFile('xdg-open', [revealDir], () => {});
+          }
           return Promise.resolve(true);
         } catch (e) {
           return Promise.resolve(false);
@@ -1226,6 +1295,10 @@ class SwiftAddonStub extends EventEmitter {
         return Promise.resolve(self.writeToProcess(id, data));
       },
 
+      isProcessRunning: (id) => {
+        return Promise.resolve(self.isProcessRunning(id));
+      },
+
       start: () => {
         console.log('[claude-swift] vm.start()');
         self._guestConnected = true;
@@ -1473,10 +1546,11 @@ class SwiftAddonStub extends EventEmitter {
               trace('Translated envVar ' + key + ': ' + val + ' -> ' + translated);
               envVars[key] = translated;
             } catch (err) {
-              trace('WARNING: Failed to translate envVar ' + key + '="' + val + '": ' + err.message);
+              const warning = 'Failed to translate envVar ' + key + '="' + val + '": ' + err.message;
+              trace('WARNING: ' + warning);
               if (key === 'CLAUDE_CONFIG_DIR') {
-                if (this._onError) this._onError(id, 'CLAUDE_CONFIG_DIR translation failed: ' + err.message, err.stack || '');
-                return { success: false, error: 'CLAUDE_CONFIG_DIR translation failed' };
+                if (this._onError) this._onError(id, warning, err.stack || '');
+                return { success: false, error: warning };
               }
             }
           }
@@ -1626,6 +1700,11 @@ class SwiftAddonStub extends EventEmitter {
 
   cancelProcess(id) {
     return this.killProcess(id);
+  }
+
+  isProcessRunning(id) {
+    const proc = this._processes.get(id);
+    return !!(proc && proc.exitCode === null && !proc.killed);
   }
 
   writeToProcess(id, data) {
