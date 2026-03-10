@@ -148,6 +148,7 @@ function translateVmPathStrict(vmPath) {
   }
   const sessionPath = vmPath.substring('/sessions/'.length);
   if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
+    trace('SECURITY: Path traversal blocked: ' + vmPath);
     throw new Error('Path traversal blocked: ' + vmPath);
   }
   return path.join(SESSIONS_BASE, sessionPath);
@@ -158,6 +159,9 @@ function translateVmPathStrict(vmPath) {
 // ancestor, canonicalizes that, then reattaches the remaining segments.
 // Never accepts raw /sessions/... paths — caller must translate first.
 function canonicalizeHostPath(hostPath) {
+  if (!path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
   try {
     return fs.realpathSync(hostPath);
   } catch (_) {
@@ -174,6 +178,16 @@ function canonicalizeHostPath(hostPath) {
     }
     return hostPath;
   }
+}
+
+function extractSessionNameFromVmPathStrict(vmPath) {
+  const hostPath = translateVmPathStrict(vmPath);
+  const relativePath = path.relative(SESSIONS_BASE, hostPath);
+  const parts = relativePath.split(path.sep).filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error('Missing session name in VM path: ' + vmPath);
+  }
+  return parts[0];
 }
 
 function generateUUID() {
@@ -456,31 +470,65 @@ function createMountSymlinks(sessionName, additionalMounts) {
 }
 
 /**
- * Extract session name from spawn arguments or process name
- * The session name is used in paths like /sessions/<sessionName>/mnt/...
+ * Extract session name only from validated VM paths supplied by the asar.
+ * Never falls back to processName, which is human-readable metadata.
  */
-function extractSessionName(processName, args) {
-  // First try to extract from args (look for /sessions/<name>/ pattern)
-  if (args && Array.isArray(args)) {
-    for (const arg of args) {
-      if (typeof arg === 'string') {
-        const match = arg.match(/\/sessions\/([^\/]+)\//);
-        if (match) {
-          trace('Extracted session name from args: ' + match[1]);
-          return match[1];
-        }
+function extractSessionName(args, envVars, sharedCwdPath) {
+  if (typeof sharedCwdPath === 'string' && sharedCwdPath.startsWith('/sessions/')) {
+    const sessionName = extractSessionNameFromVmPathStrict(sharedCwdPath);
+    trace('Extracted session name from sharedCwdPath: ' + sessionName);
+    return sessionName;
+  }
+
+  if (envVars && typeof envVars === 'object') {
+    for (const [key, value] of Object.entries(envVars)) {
+      if (typeof value === 'string' && value.startsWith('/sessions/')) {
+        const sessionName = extractSessionNameFromVmPathStrict(value);
+        trace('Extracted session name from envVar ' + key + ': ' + sessionName);
+        return sessionName;
       }
     }
   }
 
-  // Fall back to process name
-  if (processName) {
-    trace('Using process name as session name: ' + processName);
-    return processName;
+  if (args && Array.isArray(args)) {
+    for (const arg of args) {
+      if (typeof arg === 'string' && arg.startsWith('/sessions/')) {
+        const sessionName = extractSessionNameFromVmPathStrict(arg);
+        trace('Extracted session name from args: ' + sessionName);
+        return sessionName;
+      }
+    }
   }
 
-  trace('WARNING: Could not determine session name');
+  trace('WARNING: No validated VM path available for session name extraction');
   return null;
+}
+
+function findSessionName(args, envVars, sharedCwdPath) {
+  try {
+    return extractSessionName(args, envVars, sharedCwdPath);
+  } catch (err) {
+    trace('SECURITY: Invalid VM path while extracting session name: ' + err.message);
+    throw err;
+  }
+}
+
+function canonicalizeVmPathStrict(vmPath) {
+  return canonicalizeHostPath(translateVmPathStrict(vmPath));
+}
+
+// For arbitrary host paths from desktop integrations, avoid ancestor walking
+// if the target is missing or inaccessible. Those paths are not crossing the
+// VM boundary, so preserve the original string unless realpath succeeds.
+function canonicalizeResolvableHostPath(hostPath) {
+  if (typeof hostPath !== 'string' || !path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
+  try {
+    return fs.realpathSync(hostPath);
+  } catch (_) {
+    return hostPath;
+  }
 }
 
 class SwiftAddonStub extends EventEmitter {
@@ -605,13 +653,13 @@ class SwiftAddonStub extends EventEmitter {
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
           try {
-            hostPath = canonicalizeHostPath(translateVmPathStrict(filePath));
+            hostPath = canonicalizeVmPathStrict(filePath);
           } catch (e) {
             console.error('[claude-swift] openFile path error:', e.message);
             return Promise.resolve(false);
           }
         } else {
-          hostPath = canonicalizeHostPath(filePath);
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
         console.log('[claude-swift] desktop.openFile() resolved to:', hostPath);
         try {
@@ -630,13 +678,13 @@ class SwiftAddonStub extends EventEmitter {
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
           try {
-            hostPath = canonicalizeHostPath(translateVmPathStrict(filePath));
+            hostPath = canonicalizeVmPathStrict(filePath);
           } catch (e) {
             console.error('[claude-swift] revealFile path error:', e.message);
             return Promise.resolve(false);
           }
         } else {
-          hostPath = canonicalizeHostPath(filePath);
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
         console.log('[claude-swift] desktop.revealFile() resolved to:', hostPath);
         try {
@@ -660,13 +708,13 @@ class SwiftAddonStub extends EventEmitter {
         let hostPath = filePath;
         if (typeof filePath === 'string' && filePath.startsWith('/sessions/')) {
           try {
-            hostPath = canonicalizeHostPath(translateVmPathStrict(filePath));
+            hostPath = canonicalizeVmPathStrict(filePath);
           } catch (e) {
             console.error('[claude-swift] previewFile path error:', e.message);
             return Promise.resolve(false);
           }
         } else {
-          hostPath = canonicalizeHostPath(filePath);
+          hostPath = canonicalizeResolvableHostPath(filePath);
         }
         console.log('[claude-swift] desktop.previewFile() resolved to:', hostPath);
         try {
@@ -899,13 +947,30 @@ class SwiftAddonStub extends EventEmitter {
         trace('vm.spawn() isResume=' + isResume);
         trace('vm.spawn() sharedCwdPath=' + sharedCwdPath);
 
-        // Extract session name and create mount symlinks BEFORE translating paths
-        const sessionName = extractSessionName(processName, args);
-        if (sessionName && additionalMounts) {
+        // Derive the session slug only from validated /sessions/... paths.
+        let sessionName = null;
+        try {
+          sessionName = findSessionName(args, envVars, sharedCwdPath);
+        } catch (err) {
+          if (self._onError) self._onError(id, err.message, err.stack || '');
+          return { success: false, error: err.message };
+        }
+        if (additionalMounts) {
+          if (!sessionName) {
+            const msg = 'Missing validated session path for mount creation';
+            trace('SECURITY: ' + msg);
+            if (self._onError) self._onError(id, msg, '');
+            return { success: false, error: msg };
+          }
           trace('Creating mount symlinks for session: ' + sessionName);
-          createMountSymlinks(sessionName, additionalMounts);
+          if (!createMountSymlinks(sessionName, additionalMounts)) {
+            const msg = 'Failed to create mount symlinks for session: ' + sessionName;
+            trace('ERROR: ' + msg);
+            if (self._onError) self._onError(id, msg, '');
+            return { success: false, error: msg };
+          }
         } else {
-          trace('Skipping mount symlink creation: sessionName=' + sessionName + ', hasAdditionalMounts=' + !!additionalMounts);
+          trace('Skipping mount symlink creation: no additionalMounts provided');
         }
 
         // SECURITY: Validate and normalize command to the resolved binary.
@@ -966,18 +1031,13 @@ class SwiftAddonStub extends EventEmitter {
         // Translate VM paths in args with path traversal protection
         let hostArgs = (args || []).map(arg => {
           if (typeof arg === 'string' && arg.startsWith('/sessions/')) {
-            // Extract session path component
-            const sessionPath = arg.substring('/sessions/'.length);
-
-            // SECURITY: Validate no path traversal
-            if (sessionPath.includes('..') || !isPathSafe(SESSIONS_BASE, sessionPath)) {
-              trace('SECURITY: Path traversal blocked: ' + arg);
+            try {
+              const translated = canonicalizeVmPathStrict(arg);
+              trace('Translated arg: ' + arg + ' -> ' + translated);
+              return translated;
+            } catch (_) {
               return arg; // Return original (will fail gracefully)
             }
-
-            const translated = canonicalizeHostPath(path.join(SESSIONS_BASE, sessionPath));
-            trace('Translated arg: ' + arg + ' -> ' + translated);
-            return translated;
           }
           return arg;
         });
@@ -1007,11 +1067,10 @@ class SwiftAddonStub extends EventEmitter {
         // Translate sharedCwdPath if it's a VM path
         let hostCwdPath = sharedCwdPath;
         if (typeof sharedCwdPath === 'string' && sharedCwdPath.startsWith('/sessions/')) {
-          const sessionPath = sharedCwdPath.substring('/sessions/'.length);
-          if (!sessionPath.includes('..') && isPathSafe(SESSIONS_BASE, sessionPath)) {
-            hostCwdPath = canonicalizeHostPath(path.join(SESSIONS_BASE, sessionPath));
+          try {
+            hostCwdPath = canonicalizeVmPathStrict(sharedCwdPath);
             trace('Translated sharedCwdPath: ' + sharedCwdPath + ' -> ' + hostCwdPath);
-          }
+          } catch (_) {}
         }
         trace('vm.spawn() sharedCwdPath=' + sharedCwdPath + ' hostCwdPath=' + hostCwdPath);
 
@@ -1060,7 +1119,7 @@ class SwiftAddonStub extends EventEmitter {
         // Translate VM path to host path and resolve symlinks
         let hostPath = vmPath;
         if (typeof vmPath === 'string' && vmPath.startsWith('/sessions/')) {
-          hostPath = canonicalizeHostPath(translateVmPathStrict(vmPath));
+          hostPath = canonicalizeVmPathStrict(vmPath);
         }
 
         trace('vm.readFile() translated to: ' + hostPath);
@@ -1086,7 +1145,7 @@ class SwiftAddonStub extends EventEmitter {
         // Translate VM path to host path and resolve symlinks
         let hostPath = vmPath;
         if (typeof vmPath === 'string' && vmPath.startsWith('/sessions/')) {
-          hostPath = canonicalizeHostPath(translateVmPathStrict(vmPath));
+          hostPath = canonicalizeVmPathStrict(vmPath);
         }
 
         trace('vm.writeFile() translated to: ' + hostPath);
@@ -1180,7 +1239,7 @@ class SwiftAddonStub extends EventEmitter {
 
         // Translate VM path to host path and resolve symlinks
         if (typeof pathName === 'string' && pathName.startsWith('/sessions/')) {
-          const hostPath = canonicalizeHostPath(translateVmPathStrict(pathName));
+          const hostPath = canonicalizeVmPathStrict(pathName);
           trace('vm.mountPath() translated to: ' + hostPath);
 
           // Ensure parent directory exists
@@ -1271,12 +1330,11 @@ class SwiftAddonStub extends EventEmitter {
         for (const key of Object.keys(envVars)) {
           const val = envVars[key];
           if (typeof val === 'string' && val.startsWith('/sessions/')) {
-            const sessionPath = val.substring('/sessions/'.length);
-            if (!sessionPath.includes('..') && isPathSafe(SESSIONS_BASE, sessionPath)) {
-              const translated = path.join(SESSIONS_BASE, sessionPath);
+            try {
+              const translated = translateVmPathStrict(val);
               trace('Translated envVar ' + key + ': ' + val + ' -> ' + translated);
               envVars[key] = translated;
-            }
+            } catch (_) {}
           }
         }
       }
@@ -1361,6 +1419,10 @@ class SwiftAddonStub extends EventEmitter {
     try {
       const { cwd: optCwd, env: optEnv, ...safeOptions } = (options || {});
       const cwd = canonicalizeHostPath(optCwd || process.cwd());
+      // Intentionally inherit process.env here. The asar does not pass its
+      // filtered LocalAgentMode envVars through spawnSync(), so ignoring
+      // options.env preserves the existing behavior while still blocking
+      // callers from overriding the canonicalized cwd.
       const result = nodeSpawnSync(command, args || [], { encoding: 'utf-8', cwd, ...safeOptions });
       return { stdout: result.stdout, stderr: result.stderr, status: result.status, signal: result.signal, error: result.error };
     } catch (err) {

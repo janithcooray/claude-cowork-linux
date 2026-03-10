@@ -52,6 +52,17 @@ function trace(category, msg, data = null) {
   }
 }
 
+function canonicalizeResolvableHostPath(hostPath) {
+  if (typeof hostPath !== 'string' || !path.isAbsolute(hostPath)) {
+    return hostPath;
+  }
+  try {
+    return fs.realpathSync(hostPath);
+  } catch (_) {
+    return hostPath;
+  }
+}
+
 // ============================================================
 // IPC Handler Registration
 // These handlers are what the app expects to exist
@@ -240,10 +251,9 @@ const nativeStub = {
   // File system integration
   revealInFinder: (filePath) => {
     trace('NATIVE', 'revealInFinder', { path: filePath });
-    // xdg-open on Linux — resolve symlinks to canonical host path
+    // xdg-open on Linux — resolve symlinks for real host paths when possible
     const { spawn } = require('child_process');
-    let resolved = filePath;
-    try { resolved = require('fs').realpathSync(filePath); } catch (_) {}
+    const resolved = canonicalizeResolvableHostPath(filePath);
     spawn('xdg-open', [path.dirname(resolved)], { detached: true, stdio: 'ignore' });
   },
 

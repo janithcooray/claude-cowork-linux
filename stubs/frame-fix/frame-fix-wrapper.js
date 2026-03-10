@@ -19,6 +19,8 @@ const REAL_ARCH = process.arch;
 const vmBundleDir = path.join(os.homedir(), '.config/Claude/vm_bundles');
 const vmTmpDir = path.join(vmBundleDir, 'tmp');
 const claudeVmBundle = path.join(vmBundleDir, 'claudevm.bundle');
+const APP_SUPPORT_ROOT = path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
+const LOCAL_AGENT_ROOT = path.join(APP_SUPPORT_ROOT, 'LocalAgentModeSessions');
 
 try {
   // Create temp dir on same filesystem as target
@@ -178,8 +180,8 @@ global.__cowork = {
   processes: new Map(),
 };
 
-// Create sessions directory
-const SESSIONS_BASE = path.join(os.homedir(), '.local/share/claude-cowork/sessions');
+// Keep the bootstrap wrapper aligned with the swift stub's session root.
+const SESSIONS_BASE = path.join(LOCAL_AGENT_ROOT, 'sessions');
 try { fs.mkdirSync(SESSIONS_BASE, { recursive: true, mode: 0o700 }); } catch(e) {}
 
 // Override getYukonSilverSupportStatus globally

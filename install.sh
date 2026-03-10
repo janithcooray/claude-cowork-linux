@@ -641,7 +641,7 @@ doctor() {
         log_warn "/sessions exists but is a directory (should be a symlink)"
         warn=$((warn + 1))
     else
-        log_error "/sessions: NOT FOUND -- run: sudo ln -s ~/.local/share/claude-cowork/sessions /sessions"
+        log_error "/sessions: NOT FOUND -- run: sudo ln -s \"$HOME/Library/Application Support/Claude/LocalAgentModeSessions/sessions\" /sessions"
         fail=$((fail + 1))
     fi
 
