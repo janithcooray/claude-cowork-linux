@@ -1664,42 +1664,17 @@ class SwiftAddonStub extends EventEmitter {
 
   isProcessRunning(id) {
     const proc = this._processes.get(id);
-    return !!(proc && proc.exitCode === null && !proc.killed);
+    // Only check exitCode - proc.killed flips on signal send, not process exit
+    return !!(proc && proc.exitCode === null);
   }
 
   writeToProcess(id, data) {
     console.log('[claude-swift] writeToProcess(' + id + ')');
     const proc = this._processes.get(id);
     if (proc && proc.stdin) {
-      // Targeted path translation for JSON string values only
-      // Patterns match "/sessions/ which won't match already-translated SESSIONS_BASE paths
-      let translatedData = data;
-      if (typeof data === 'string') {
-        const hasUnescaped = data.includes('/sessions/');
-        const hasEscaped = data.includes('\\/sessions\\/');
-        if (hasUnescaped || hasEscaped) {
-          // Replace unescaped JSON paths: "/sessions/
-          if (hasUnescaped) {
-            translatedData = translatedData.replace(
-              /"\/sessions\//g,
-              '"' + SESSIONS_BASE + '/'
-            );
-          }
-          // Replace escaped JSON paths: "\/sessions\/ (JSON-escaped slashes)
-          if (hasEscaped) {
-            translatedData = translatedData.replace(/"\\\//g, '\x00');
-            translatedData = translatedData.replace(
-              /\x00sessions\\\//g,
-              '"\\' + SESSIONS_BASE.replace(/\//g, '\\/') + '\\/'
-            );
-            translatedData = translatedData.replace(/\x00/g, '"\\/');
-          }
-          if (translatedData !== data && TRACE_IO) {
-            trace('writeToProcess: translated /sessions/ paths in JSON strings');
-          }
-        }
-      }
-      proc.stdin.write(translatedData);
+      // Raw passthrough - /sessions symlink now points to active SESSIONS_BASE,
+      // so paths resolve correctly without translation
+      proc.stdin.write(data);
     }
   }
 

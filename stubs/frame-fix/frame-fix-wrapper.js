@@ -331,7 +331,8 @@ function getSyntheticIPCResponse(channel) {
   if (channel.includes('isProcessRunning')) {
     return async (...args) => {
       const processId = parseRequestedProcessId(args);
-      return getCoworkProcessRunningState(processId);
+      const state = await getCoworkProcessRunningState(processId);
+      return state.running; // Return boolean to match stub API
     };
   }
   return null;
@@ -437,12 +438,21 @@ Module.prototype.require = function(id) {
 
       const originalHandle = ipcMain.handle.bind(ipcMain);
       ipcMain.handle = function(channel, handler) {
-        // Filter queue-operation messages from transcripts — unknown type in current webapp
+        // Filter ignored message types from transcripts — check both top-level and nested
         if (channel.includes('getTranscript')) {
           return originalHandle(channel, async (...args) => {
             const result = await handler(...args);
             if (Array.isArray(result)) {
-              return result.filter(msg => msg && !IGNORED_LIVE_MESSAGE_TYPES.has(msg.type));
+              return result.filter(msg => {
+                if (!msg) return false;
+                // Check top-level type
+                if (IGNORED_LIVE_MESSAGE_TYPES.has(msg.type)) return false;
+                // Check nested message type (matches live filtering logic)
+                if (msg.type === 'message' && msg.message && IGNORED_LIVE_MESSAGE_TYPES.has(msg.message.type)) {
+                  return false;
+                }
+                return true;
+              });
             }
             return result;
           });
@@ -475,7 +485,8 @@ Module.prototype.require = function(id) {
             }
             if (method === 'isProcessRunning') {
               const processId = parseRequestedProcessId(args);
-              return getCoworkProcessRunningState(processId);
+              const state = await getCoworkProcessRunningState(processId);
+              return state.running; // Return boolean to match stub API
             }
 
             // Call original handler for other methods
