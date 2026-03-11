@@ -63,24 +63,6 @@ function canonicalizeResolvableHostPath(hostPath) {
   }
 }
 
-function findNearestExistingAncestor(hostPath) {
-  if (typeof hostPath !== 'string' || hostPath.length === 0) {
-    return hostPath;
-  }
-  let current = path.isAbsolute(hostPath) ? hostPath : path.resolve(hostPath);
-  while (true) {
-    try {
-      return fs.realpathSync(current);
-    } catch (_) {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return current;
-      }
-      current = parent;
-    }
-  }
-}
-
 // ============================================================
 // IPC Handler Registration
 // These handlers are what the app expects to exist
@@ -300,7 +282,15 @@ const nativeStub = {
         ? canonicalizeResolvableHostPath(filePath)
         : canonicalizeResolvableHostPath(path.dirname(filePath));
     } catch (_) {
-      revealDir = findNearestExistingAncestor(path.dirname(filePath));
+      // Only fall back to immediate parent, not arbitrary ancestors
+      const parentDir = path.dirname(filePath);
+      try {
+        fs.accessSync(parentDir, fs.constants.R_OK);
+        revealDir = parentDir;
+      } catch (_) {
+        console.error('[claude-native] revealInFinder: target and parent missing:', filePath);
+        return; // Don't open unrelated directories
+      }
     }
     spawn('xdg-open', [revealDir], { detached: true, stdio: 'ignore' });
   },
