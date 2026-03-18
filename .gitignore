@@ -28,6 +28,12 @@ package-lock.json
 /tmp/
 
 # Working/investigation files (keep repo clean)
+
+# Audit artifacts
+AUDIT-REPORT.md
+IMPLEMENTATION-GUIDE.md
+code-audit.sql
+docs/frame-fix-wrapper-audit.md
 /archive/
 AGENT_HANDOFF.md
 ARCHITECTURE_MAP.md
