@@ -2,13 +2,13 @@
 #
 # Claude Desktop for Linux - Installer
 #
-# Usage: ./install.sh [path/to/Claude.dmg]
+# Usage: ./install.sh [path/to/Claude.dmg|zip]
 #        curl -fsSL https://raw.githubusercontent.com/johnzfitch/claude-cowork-linux/master/install.sh | bash
 #
 # This script:
 #   1. Checks/installs dependencies (git, 7z, node, electron, asar)
 #   2. Clones the claude-cowork-linux repo
-#   3. Extracts Claude Desktop from a macOS DMG
+#   3. Extracts Claude Desktop from a macOS archive (DMG or ZIP)
 #   4. Creates ~/.local/bin/claude-desktop launcher
 #   5. Creates desktop entry
 #
@@ -29,8 +29,8 @@ REPO_URL="https://github.com/johnzfitch/claude-cowork-linux.git"
 INSTALL_DIR="$HOME/.local/share/claude-desktop"
 CLAUDE_DOWNLOAD_PAGE="https://claude.ai/download"
 
-# Minimum expected DMG size (100MB)
-MIN_DMG_SIZE=100000000
+# Minimum expected archive size (100MB) — applies to both DMG and ZIP
+MIN_ARCHIVE_SIZE=100000000
 
 # Temp directory (cleaned up on exit)
 WORK_DIR=$(mktemp -d)
@@ -161,13 +161,13 @@ setup_repo() {
 }
 
 # ============================================================
-# Step 3: Get the Claude Desktop DMG
+# Step 3: Get the Claude Desktop archive (ZIP or DMG)
 # ============================================================
 
-fetch_dmg_via_node() {
-    # Auto-download DMG using Node.js to fetch the API endpoint.
+fetch_archive_via_node() {
+    # Auto-download Claude archive (ZIP or DMG) using the Homebrew cask API.
     # Node.js is already a hard dependency; no Python/rnet needed.
-    local dmg_path="$1"
+    local archive_path="$1"
     local fetch_script
 
     # Locate fetch-dmg.js (repo clone or running from source)
@@ -180,54 +180,55 @@ fetch_dmg_via_node() {
         return 1
     fi
 
-    log_info "Fetching latest DMG URL..."
-    local dmg_url
-    dmg_url=$(node "$fetch_script" --url 2>/dev/null) || {
-        log_warn "Failed to fetch DMG URL via Node.js"
+    log_info "Fetching latest download URL..."
+    local archive_url
+    archive_url=$(node "$fetch_script" --url 2>/dev/null) || {
+        log_warn "Failed to fetch download URL via Node.js"
         return 1
     }
 
-    log_info "Downloading DMG from CDN..."
-    if curl -fSL --progress-bar -o "$dmg_path" "$dmg_url"; then
+    log_info "Downloading Claude archive from CDN..."
+    if curl -fSL --progress-bar -o "$archive_path" "$archive_url"; then
         local size
-        size=$(stat -c%s "$dmg_path" 2>/dev/null || echo 0)
-        if [[ "$size" -ge "$MIN_DMG_SIZE" ]]; then
-            log_success "Downloaded DMG: $(format_size "$size")"
+        size=$(stat -c%s "$archive_path" 2>/dev/null || echo 0)
+        if [[ "$size" -ge "$MIN_ARCHIVE_SIZE" ]]; then
+            log_success "Downloaded archive: $(format_size "$size")"
             return 0
         fi
         log_warn "Downloaded file too small ($(format_size "$size")), may be corrupt"
-        rm -f "$dmg_path"
+        rm -f "$archive_path"
     fi
 
     log_warn "CDN download failed"
     return 1
 }
 
-get_dmg() {
-    local dmg_path="$1"
+get_archive() {
+    local archive_path="$1"
 
-    # 1. User-provided DMG path
-    if [[ -n "${CLAUDE_DMG:-}" ]]; then
+    # 1. User-provided archive path (CLAUDE_DMG kept for backward compat)
+    local user_archive="${CLAUDE_ARCHIVE:-${CLAUDE_DMG:-}}"
+    if [[ -n "$user_archive" ]]; then
         local resolved_path
-        resolved_path=$(realpath -e "$CLAUDE_DMG" 2>/dev/null) || die "DMG not found: $CLAUDE_DMG"
-        [[ -f "$resolved_path" ]] || die "CLAUDE_DMG must be a regular file: $CLAUDE_DMG"
-        log_info "Using user-provided DMG: $resolved_path"
-        cp "$resolved_path" "$dmg_path"
+        resolved_path=$(realpath -e "$user_archive" 2>/dev/null) || die "Archive not found: $user_archive"
+        [[ -f "$resolved_path" ]] || die "Archive must be a regular file: $user_archive"
+        log_info "Using user-provided archive: $resolved_path"
+        cp "$resolved_path" "$archive_path"
         return 0
     fi
 
-    # 2. Check install dir for existing DMG
-    local existing_dmg=""
-    existing_dmg=$(find "$INSTALL_DIR" -maxdepth 1 \( -name "Claude*.dmg" -o -name "claude*.dmg" \) -type f -print -quit 2>/dev/null)
-    if [[ -n "$existing_dmg" ]]; then
-        log_info "Found existing DMG: $existing_dmg"
-        cp "$existing_dmg" "$dmg_path"
+    # 2. Check install dir for existing archive (ZIP or DMG)
+    local existing=""
+    existing=$(find "$INSTALL_DIR" -maxdepth 1 \( -name "Claude*.zip" -o -name "claude*.zip" -o -name "Claude*.dmg" -o -name "claude*.dmg" \) -type f -print -quit 2>/dev/null)
+    if [[ -n "$existing" ]]; then
+        log_info "Found existing archive: $existing"
+        cp "$existing" "$archive_path"
         return 0
     fi
 
     # 3. Auto-download via Node.js
     if command_exists node; then
-        if fetch_dmg_via_node "$dmg_path"; then
+        if fetch_archive_via_node "$archive_path"; then
             return 0
         fi
         log_warn "Auto-download failed, falling back to browser download"
@@ -240,22 +241,22 @@ get_dmg() {
     touch "$marker"
 
     log_info "Opening claude.ai/download in your browser..."
-    log_info "Download the macOS (Universal) DMG — the installer will continue automatically."
+    log_info "Download the macOS (Universal) installer — the installer will continue automatically."
     echo ""
     if ! xdg-open "$CLAUDE_DOWNLOAD_PAGE" 2>/dev/null; then
         log_warn "Could not open browser automatically."
         log_info "Please open this URL manually: $CLAUDE_DOWNLOAD_PAGE"
     fi
 
-    log_info "Waiting for Claude*.dmg in $dl_dir ..."
+    log_info "Waiting for Claude download in $dl_dir ..."
     local found="" elapsed=0 timeout=600
     while [[ -z "$found" ]]; do
         sleep 2
         elapsed=$((elapsed + 2))
         if [[ "$elapsed" -ge "$timeout" ]]; then
-            die "Timed out. Re-run with: CLAUDE_DMG=/path/to/Claude.dmg $0"
+            die "Timed out. Re-run with: CLAUDE_ARCHIVE=/path/to/Claude.zip $0"
         fi
-        found=$(find "$dl_dir" -maxdepth 1 \( -name "Claude*.dmg" -o -name "claude*.dmg" \) \
+        found=$(find "$dl_dir" -maxdepth 1 \( -name "Claude*.zip" -o -name "claude*.zip" -o -name "Claude*.dmg" -o -name "claude*.dmg" \) \
             -newer "$marker" -type f -print -quit 2>/dev/null)
     done
     log_success "Detected: $found"
@@ -281,27 +282,27 @@ get_dmg() {
         fi
     done
     log_success "Download complete: $(format_size "$curr_size")"
-    cp "$found" "$dmg_path"
+    cp "$found" "$archive_path"
 }
 
 # ============================================================
-# Step 4: Extract DMG into linux-app-extracted/
+# Step 4: Extract archive into linux-app-extracted/
 # ============================================================
 
-extract_dmg() {
-    local dmg_path="$1"
+extract_archive() {
+    local archive_path="$1"
     local target_dir="$INSTALL_DIR/linux-app-extracted"
 
-    # Extract DMG
-    log_info "Extracting DMG..." >&2
+    # Extract archive (7z handles both DMG and ZIP)
+    log_info "Extracting archive..." >&2
     local extract_dir="$WORK_DIR/extract"
     local seven_z_exit=0
-    7z x -y -o"$extract_dir" "$dmg_path" >/dev/null 2>&1 || seven_z_exit=$?
+    7z x -y -o"$extract_dir" "$archive_path" >/dev/null 2>&1 || seven_z_exit=$?
     # 7z exit 1 = warning, exit 2 = "Dangerous link path" (e.g. /Applications symlink
     # in DMG). Both are non-fatal on Linux — the symlink is macOS-specific.
     # See: https://github.com/johnzfitch/claude-cowork-linux/issues/35
     if [[ $seven_z_exit -gt 2 ]]; then
-        die "Failed to extract DMG (7z exit code: $seven_z_exit)"
+        die "Failed to extract archive (7z exit code: $seven_z_exit)"
     fi
     if [[ $seven_z_exit -eq 1 || $seven_z_exit -eq 2 ]]; then
         log_warn "7z exited with code $seven_z_exit (non-fatal; e.g. skipped macOS symlinks)"
@@ -310,7 +311,7 @@ extract_dmg() {
     # Find Claude.app and app.asar
     local claude_app
     claude_app=$(find "$extract_dir" -name "Claude.app" -type d | head -1)
-    [[ -n "$claude_app" ]] || die "Claude.app not found in DMG"
+    [[ -n "$claude_app" ]] || die "Claude.app not found in archive"
 
     local asar_file="$claude_app/Contents/Resources/app.asar"
     [[ -f "$asar_file" ]] || die "app.asar not found at: $asar_file"
@@ -351,7 +352,7 @@ extract_dmg() {
     # See: https://github.com/johnzfitch/claude-cowork-linux/issues/33
     if ! ls "$target_dir/resources/i18n"/*.json >/dev/null 2>&1; then
         log_warn "No i18n JSON files found in resources/i18n/ — the app may fail to start"
-        log_warn "Try re-running the installer with a fresh DMG download"
+        log_warn "Try re-running the installer with a fresh download"
     fi
 
     log_success "Extracted app to linux-app-extracted/"
@@ -790,9 +791,9 @@ main() {
         exit $?
     fi
 
-    # Positional arg → CLAUDE_DMG
-    if [[ -n "${1:-}" && -z "${CLAUDE_DMG:-}" ]]; then
-        export CLAUDE_DMG="$1"
+    # Positional arg → CLAUDE_ARCHIVE (CLAUDE_DMG kept for backward compat)
+    if [[ -n "${1:-}" && -z "${CLAUDE_ARCHIVE:-}" && -z "${CLAUDE_DMG:-}" ]]; then
+        export CLAUDE_ARCHIVE="$1"
     fi
 
     echo ""
@@ -814,13 +815,13 @@ main() {
     setup_repo
     echo ""
 
-    # Step 3: Get DMG
-    local dmg_path="$WORK_DIR/Claude.dmg"
-    get_dmg "$dmg_path"
+    # Step 3: Get Claude archive (ZIP or DMG)
+    local archive_path="$WORK_DIR/Claude.archive"
+    get_archive "$archive_path"
     echo ""
 
-    # Step 4: Extract DMG → linux-app-extracted/
-    extract_dmg "$dmg_path"
+    # Step 4: Extract archive → linux-app-extracted/
+    extract_archive "$archive_path"
     echo ""
 
     # Step 5: Bake stubs into node_modules
