@@ -471,7 +471,7 @@ mkdir -p "\$LOG_DIR"
 cd "\$COWORK_DIR"
 
 case "\${1:-}" in
-    --devtools) shift; exec ./launch-devtools.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
+    --devtools) shift; export CLAUDE_DEVTOOLS=1; exec ./launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
     --debug)    shift; export CLAUDE_TRACE=1; exec ./launch.sh "\$@" 2>&1 | tee -a "\$LOG_DIR/startup.log" ;;
     --doctor)   exec ./install.sh --doctor ;;
     *)

@@ -125,13 +125,15 @@ if [[ -d "$CLAUDE_CODE_DIR" ]]; then
 fi
 
 # --devtools flag opens DevTools + asset dumper on launch
+_args=()
 for arg in "$@"; do
   if [[ "$arg" == "--devtools" ]]; then
     export CLAUDE_DEVTOOLS=1
-    shift
-    break
+  else
+    _args+=("$arg")
   fi
 done
+set -- "${_args[@]}"
 
 # Enable logging
 export ELECTRON_ENABLE_LOGGING=1
