@@ -240,6 +240,28 @@ fetch_archive_via_node() {
     return 1
 }
 
+scan_for_archive() {
+    # Scan all common locations for a Claude archive
+    local script_dir="$1"
+    local dl_dirs=()
+    local xdg_dl
+    xdg_dl=$(xdg-user-dir DOWNLOAD 2>/dev/null)
+    [[ -n "$xdg_dl" && -d "$xdg_dl" ]] && dl_dirs+=("$xdg_dl")
+    [[ -d "$HOME/Downloads" ]]          && dl_dirs+=("$HOME/Downloads")
+    [[ -d "$HOME/downloads" ]]          && dl_dirs+=("$HOME/downloads")
+    dl_dirs+=("$script_dir" "$INSTALL_DIR")
+
+    for search_dir in "${dl_dirs[@]}"; do
+        local hit
+        hit=$(find_claude_archive "$search_dir")
+        if [[ -n "$hit" ]]; then
+            printf '%s' "$hit"
+            return 0
+        fi
+    done
+    return 1
+}
+
 get_archive() {
     local archive_path="$1"
     local script_dir
@@ -257,20 +279,7 @@ get_archive() {
         return 0
     fi
 
-    # 2. Check next to install.sh and in install dir for existing archive
-    local existing=""
-    for search_dir in "$script_dir" "$INSTALL_DIR"; do
-        existing=$(find_claude_archive "$search_dir")
-        [[ -n "$existing" ]] && break
-    done
-    if [[ -n "$existing" ]]; then
-        log_info "Found existing archive: $existing"
-        show_archive_info "$existing"
-        cp "$existing" "$archive_path"
-        return 0
-    fi
-
-    # 3. Auto-download via Node.js (Homebrew cask API)
+    # 2. Auto-download via Node.js (Homebrew cask API)
     if command_exists node; then
         if fetch_archive_via_node "$archive_path"; then
             return 0
@@ -278,61 +287,31 @@ get_archive() {
         log_warn "Auto-download failed"
     fi
 
-    # 4. Send user to download page, wait for them to finish
-    echo ""
-    log_info "Opening the Claude download page in your browser..."
-    log_info "Download the macOS installer (it contains the app we need)."
-    echo ""
-    if ! xdg-open "$CLAUDE_DOWNLOAD_REDIRECT" 2>/dev/null; then
-        log_warn "Could not open browser automatically."
-        echo ""
-        echo "  Download manually from:"
-        echo "    $CLAUDE_DOWNLOAD_REDIRECT"
-        echo ""
-    fi
-    echo -n "  Press ENTER when the download is complete..."
-    read -r
-
-    # 5. Scan common download locations for the archive
-    local dl_dirs=()
-    local xdg_dl
-    xdg_dl=$(xdg-user-dir DOWNLOAD 2>/dev/null)
-    [[ -n "$xdg_dl" && -d "$xdg_dl" ]] && dl_dirs+=("$xdg_dl")
-    [[ -d "$HOME/Downloads" ]] && dl_dirs+=("$HOME/Downloads")
-    [[ -d "$HOME/downloads" ]] && dl_dirs+=("$HOME/downloads")
-    # Also re-check next to install.sh in case they dropped it there
-    dl_dirs+=("$script_dir" "$INSTALL_DIR")
-
+    # 3. Scan common locations, then prompt user to download if needed
     local found=""
-    for search_dir in "${dl_dirs[@]}"; do
-        found=$(find_claude_archive "$search_dir")
-        [[ -n "$found" ]] && break
-    done
+    found=$(scan_for_archive "$script_dir") || true
 
-    if [[ -n "$found" ]]; then
-        log_success "Found: $found"
-        show_archive_info "$found"
-        cp "$found" "$archive_path"
-        return 0
-    fi
-
-    # 6. Last resort: ask user to place it next to install.sh
-    echo ""
-    log_warn "Could not find a Claude archive in any of these locations:"
-    for d in "${dl_dirs[@]}"; do
-        echo "    $d"
-    done
-    echo ""
-    echo "  Save the Claude installer (ZIP or DMG) here:"
-    echo "    $script_dir/"
-    echo ""
-    echo -n "  Press ENTER when the file is in place..."
-    read -r
-
-    found=$(find_claude_archive "$script_dir")
     if [[ -z "$found" ]]; then
-        found=$(find_claude_archive "$INSTALL_DIR")
+        # Nothing found anywhere — send user to download, then scan again
+        echo ""
+        log_info "Opening the Claude download page in your browser..."
+        log_info "Download the macOS installer (it contains the app we need)."
+        echo ""
+        if ! xdg-open "$CLAUDE_DOWNLOAD_REDIRECT" 2>/dev/null; then
+            log_warn "Could not open browser automatically."
+            echo ""
+            echo "  Download manually from:"
+            echo "    $CLAUDE_DOWNLOAD_REDIRECT"
+        fi
+        echo ""
+        echo "  Save the file to your Downloads folder or next to install.sh:"
+        echo "    $script_dir/"
+        echo ""
+        echo -n "  Press ENTER when the download is complete..."
+        read -r
+        found=$(scan_for_archive "$script_dir") || true
     fi
+
     if [[ -n "$found" ]]; then
         log_success "Found: $found"
         show_archive_info "$found"
