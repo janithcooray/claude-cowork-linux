@@ -27,7 +27,6 @@ set -euo pipefail
 VERSION="4.0.0"
 REPO_URL="https://github.com/johnzfitch/claude-cowork-linux.git"
 INSTALL_DIR="$HOME/.local/share/claude-desktop"
-CLAUDE_DOWNLOAD_PAGE="https://claude.ai/download"
 
 # Minimum expected archive size (100MB) — applies to both DMG and ZIP
 MIN_ARCHIVE_SIZE=100000000
@@ -164,13 +163,51 @@ setup_repo() {
 # Step 3: Get the Claude Desktop archive (ZIP or DMG)
 # ============================================================
 
+CLAUDE_DOWNLOAD_REDIRECT="https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect"
+
+find_claude_archive() {
+    # Search a directory for Claude archive files (ZIP or DMG)
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    find "$dir" -maxdepth 1 \( -name "Claude*.zip" -o -name "claude*.zip" \
+        -o -name "Claude*.dmg" -o -name "claude*.dmg" \) -type f -print -quit 2>/dev/null
+}
+
+show_archive_info() {
+    # Display version, SHA, size, and filesystem date for a found archive
+    local file="$1"
+    local size created
+    size=$(stat -c%s "$file" 2>/dev/null || echo 0)
+    created=$(stat -c%y "$file" 2>/dev/null | cut -d. -f1)
+    echo ""
+    log_info "  File:    $(basename "$file")"
+    log_info "  Size:    $(format_size "$size")"
+    [[ -n "$created" ]] && log_info "  Date:    $created"
+
+    # Try to get version/sha from fetch-dmg.js for comparison
+    local fetch_script=""
+    if [[ -f "$INSTALL_DIR/fetch-dmg.js" ]]; then
+        fetch_script="$INSTALL_DIR/fetch-dmg.js"
+    elif [[ -f "$(dirname "$0")/fetch-dmg.js" ]]; then
+        fetch_script="$(dirname "$0")/fetch-dmg.js"
+    fi
+    if [[ -n "$fetch_script" ]] && command_exists node; then
+        local json
+        json=$(node "$fetch_script" --json 2>/dev/null) || return 0
+        local version sha256
+        version=$(printf '%s' "$json" | node -e "process.stdin.on('data',d=>{const j=JSON.parse(d);process.stdout.write(j.version||'')})" 2>/dev/null)
+        sha256=$(printf '%s' "$json" | node -e "process.stdin.on('data',d=>{const j=JSON.parse(d);process.stdout.write(j.sha256||'')})" 2>/dev/null)
+        [[ -n "$version" ]] && log_info "  Latest:  v$version"
+        [[ -n "$sha256" ]]  && log_info "  SHA256:  ${sha256:0:16}..."
+    fi
+    echo ""
+}
+
 fetch_archive_via_node() {
     # Auto-download Claude archive (ZIP or DMG) using the Homebrew cask API.
-    # Node.js is already a hard dependency; no Python/rnet needed.
     local archive_path="$1"
     local fetch_script
 
-    # Locate fetch-dmg.js (repo clone or running from source)
     if [[ -f "$INSTALL_DIR/fetch-dmg.js" ]]; then
         fetch_script="$INSTALL_DIR/fetch-dmg.js"
     elif [[ -f "$(dirname "$0")/fetch-dmg.js" ]]; then
@@ -205,6 +242,8 @@ fetch_archive_via_node() {
 
 get_archive() {
     local archive_path="$1"
+    local script_dir
+    script_dir=$(cd "$(dirname "$0")" && pwd)
 
     # 1. User-provided archive path (CLAUDE_DMG kept for backward compat)
     local user_archive="${CLAUDE_ARCHIVE:-${CLAUDE_DMG:-}}"
@@ -213,76 +252,95 @@ get_archive() {
         resolved_path=$(realpath -e "$user_archive" 2>/dev/null) || die "Archive not found: $user_archive"
         [[ -f "$resolved_path" ]] || die "Archive must be a regular file: $user_archive"
         log_info "Using user-provided archive: $resolved_path"
+        show_archive_info "$resolved_path"
         cp "$resolved_path" "$archive_path"
         return 0
     fi
 
-    # 2. Check install dir for existing archive (ZIP or DMG)
+    # 2. Check next to install.sh and in install dir for existing archive
     local existing=""
-    existing=$(find "$INSTALL_DIR" -maxdepth 1 \( -name "Claude*.zip" -o -name "claude*.zip" -o -name "Claude*.dmg" -o -name "claude*.dmg" \) -type f -print -quit 2>/dev/null)
+    for search_dir in "$script_dir" "$INSTALL_DIR"; do
+        existing=$(find_claude_archive "$search_dir")
+        [[ -n "$existing" ]] && break
+    done
     if [[ -n "$existing" ]]; then
         log_info "Found existing archive: $existing"
+        show_archive_info "$existing"
         cp "$existing" "$archive_path"
         return 0
     fi
 
-    # 3. Auto-download via Node.js
+    # 3. Auto-download via Node.js (Homebrew cask API)
     if command_exists node; then
         if fetch_archive_via_node "$archive_path"; then
             return 0
         fi
-        log_warn "Auto-download failed, falling back to browser download"
+        log_warn "Auto-download failed"
     fi
 
-    # 4. Browser download fallback
-    local dl_dir
-    dl_dir=$(xdg-user-dir DOWNLOAD 2>/dev/null || echo "$HOME/Downloads")
-    local marker="$WORK_DIR/.download-marker"
-    touch "$marker"
-
-    log_info "Opening claude.ai/download in your browser..."
-    log_info "Download the macOS (Universal) installer — the installer will continue automatically."
+    # 4. Send user to download page, wait for them to finish
     echo ""
-    if ! xdg-open "$CLAUDE_DOWNLOAD_PAGE" 2>/dev/null; then
+    log_info "Opening the Claude download page in your browser..."
+    log_info "Download the macOS installer (it contains the app we need)."
+    echo ""
+    if ! xdg-open "$CLAUDE_DOWNLOAD_REDIRECT" 2>/dev/null; then
         log_warn "Could not open browser automatically."
-        log_info "Please open this URL manually: $CLAUDE_DOWNLOAD_PAGE"
+        echo ""
+        echo "  Download manually from:"
+        echo "    $CLAUDE_DOWNLOAD_REDIRECT"
+        echo ""
+    fi
+    echo -n "  Press ENTER when the download is complete..."
+    read -r
+
+    # 5. Scan common download locations for the archive
+    local dl_dirs=()
+    local xdg_dl
+    xdg_dl=$(xdg-user-dir DOWNLOAD 2>/dev/null)
+    [[ -n "$xdg_dl" && -d "$xdg_dl" ]] && dl_dirs+=("$xdg_dl")
+    [[ -d "$HOME/Downloads" ]] && dl_dirs+=("$HOME/Downloads")
+    [[ -d "$HOME/downloads" ]] && dl_dirs+=("$HOME/downloads")
+    # Also re-check next to install.sh in case they dropped it there
+    dl_dirs+=("$script_dir" "$INSTALL_DIR")
+
+    local found=""
+    for search_dir in "${dl_dirs[@]}"; do
+        found=$(find_claude_archive "$search_dir")
+        [[ -n "$found" ]] && break
+    done
+
+    if [[ -n "$found" ]]; then
+        log_success "Found: $found"
+        show_archive_info "$found"
+        cp "$found" "$archive_path"
+        return 0
     fi
 
-    log_info "Waiting for Claude download in $dl_dir ..."
-    local found="" elapsed=0 timeout=600
-    while [[ -z "$found" ]]; do
-        sleep 2
-        elapsed=$((elapsed + 2))
-        if [[ "$elapsed" -ge "$timeout" ]]; then
-            die "Timed out. Re-run with: CLAUDE_ARCHIVE=/path/to/Claude.zip $0"
-        fi
-        found=$(find "$dl_dir" -maxdepth 1 \( -name "Claude*.zip" -o -name "claude*.zip" -o -name "Claude*.dmg" -o -name "claude*.dmg" \) \
-            -newer "$marker" -type f -print -quit 2>/dev/null)
+    # 6. Last resort: ask user to place it next to install.sh
+    echo ""
+    log_warn "Could not find a Claude archive in any of these locations:"
+    for d in "${dl_dirs[@]}"; do
+        echo "    $d"
     done
-    log_success "Detected: $found"
+    echo ""
+    echo "  Save the Claude installer (ZIP or DMG) here:"
+    echo "    $script_dir/"
+    echo ""
+    echo -n "  Press ENTER when the file is in place..."
+    read -r
 
-    # Wait for download to finish (file size must stabilize)
-    log_info "Waiting for download to complete..."
-    local prev_size=-1 curr_size=0 stall_elapsed=0 stall_timeout=300
-    while true; do
-        curr_size=$(stat -c%s "$found" 2>/dev/null || echo 0)
-        if [[ "$prev_size" -eq "$curr_size" && "$curr_size" -gt 0 \
-              && ! -f "${found}.crdownload" ]]; then
-            break
-        fi
-        if [[ "$curr_size" -gt "$prev_size" ]]; then
-            stall_elapsed=0
-        else
-            stall_elapsed=$((stall_elapsed + 3))
-        fi
-        prev_size=$curr_size
-        sleep 3
-        if [[ "$stall_elapsed" -ge "$stall_timeout" ]]; then
-            die "Download stalled for 5 minutes. File: $found ($(format_size "$curr_size"))"
-        fi
-    done
-    log_success "Download complete: $(format_size "$curr_size")"
-    cp "$found" "$archive_path"
+    found=$(find_claude_archive "$script_dir")
+    if [[ -z "$found" ]]; then
+        found=$(find_claude_archive "$INSTALL_DIR")
+    fi
+    if [[ -n "$found" ]]; then
+        log_success "Found: $found"
+        show_archive_info "$found"
+        cp "$found" "$archive_path"
+        return 0
+    fi
+
+    die "No Claude archive found. Re-run with: CLAUDE_ARCHIVE=/path/to/Claude.zip $0"
 }
 
 # ============================================================
