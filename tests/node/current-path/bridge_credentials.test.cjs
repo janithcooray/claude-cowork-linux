@@ -256,6 +256,7 @@ test('buildSdkUrl returns null for invalid inputs', () => {
 function createOrchestratorWithBridge(overrides) {
   return createSessionOrchestrator({
     appSupportRoot: '/app/support',
+    bridgeStatePath: '/nonexistent/bridge-state.json',
     canonicalizePathForHostAccess: (inputPath) => (
       typeof inputPath === 'string' && inputPath.startsWith('/sessions/demo')
         ? inputPath.replace('/sessions/demo', '/host/sessions/demo')
@@ -273,78 +274,39 @@ function createOrchestratorWithBridge(overrides) {
   });
 }
 
-test('_resolveBridgeSession returns bridge_api result when bridge-state and /bridge succeed', (t) => {
+test('_resolveBridgeSession activates v2 transport when bridge-state has cse_* entry', (t) => {
   const tempRoot = createTempDir(t);
-  const localAgentRoot = path.join(tempRoot, 'claude-local');
-  const sessionId = 'local_demo_session';
-  const metadataPath = path.join(localAgentRoot, 'user', 'org', sessionId + '.json');
-  const configDir = metadataPath.replace(/\.json$/, '') + '/.claude';
-  const workspaceRoot = path.join(tempRoot, 'workspace');
-
-  fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.mkdirSync(workspaceRoot, { recursive: true });
-  fs.writeFileSync(metadataPath, JSON.stringify({
-    sessionId,
-    cliSessionId: 'cli-id-1',
-    cwd: workspaceRoot,
-    userSelectedFolders: [workspaceRoot],
-  }, null, 2) + '\n', 'utf8');
-
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
   fs.writeFileSync(bridgePath, JSON.stringify({
     'user:org': { remoteSessionId: 'cse_dispatch_1', localSessionId: 'local_ditto_org' },
   }), 'utf8');
 
-  const { createSessionStore } = require('../../../stubs/cowork/session_store.js');
-  const sessionStore = createSessionStore({ localAgentRoot });
-
   const orchestrator = createOrchestratorWithBridge({
     bridgeStatePath: bridgePath,
-    sessionStore,
-    sessionsApi: {
-      updateAuthToken: () => {},
-      fetchBridgeCredentials: (remoteSessionId) => {
-        assert.equal(remoteSessionId, 'cse_dispatch_1');
-        return {
-          success: true,
-          workerJwt: 'jwt-worker-token',
-          apiBaseUrl: 'https://api.anthropic.com',
-          expiresIn: 1800,
-          statusCode: 200,
-        };
-      },
-    },
   });
 
   const result = orchestrator.prepareVmSpawn({
-    processId: 'proc-bridge-api',
+    processId: 'proc-bridge',
     processName: 'demo',
     command: '/usr/local/bin/claude',
     args: ['--resume', 'old-cli-id', '--model', 'claude-opus-4-6'],
-    envVars: { CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth' },
-    additionalMounts: null,
-    sharedCwdPath: workspaceRoot,
+    envVars: { CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth' },
+    additionalMounts: { project: { path: 'project', mode: 'rw' } },
+    sharedCwdPath: '/sessions/demo/mnt/project',
   });
 
   assert.equal(result.success, true);
   assert.equal(result.envVars.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
-  assert.equal(result.envVars.CLAUDE_CODE_SESSION_ACCESS_TOKEN, 'jwt-worker-token');
-  assert.equal(result.envVars.CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2, '1');
-  // OAUTH_TOKEN cleared via undefined -> not present in env
-  assert.equal(result.envVars.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-  // --sdk-url should be in args
-  const sdkUrlIdx = result.args.indexOf('--sdk-url');
-  assert.ok(sdkUrlIdx !== -1, '--sdk-url should be present in args');
-  assert.equal(result.args[sdkUrlIdx + 1], 'wss://api.anthropic.com/v1/code/sessions/cse_dispatch_1');
+  assert.equal(result.envVars.CLAUDE_CODE_USE_CCR_V2, '1');
+  assert.equal(result.envVars.CLAUDE_CODE_IS_COWORK, '1');
+  // OAuth token preserved — CLI uses it to self-bootstrap /bridge
+  assert.equal(result.envVars.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth');
   // --session-id should be cse_*
   const sessionIdIdx = result.args.indexOf('--session-id');
   assert.ok(sessionIdIdx !== -1, '--session-id should be present');
   assert.equal(result.args[sessionIdIdx + 1], 'cse_dispatch_1');
-  // bridgeSession should be returned for refresh scheduling
   assert.ok(result.bridgeSession);
-  assert.equal(result.bridgeSession.source, 'bridge_api');
-  assert.equal(result.bridgeSession.expiresIn, 1800);
+  assert.equal(result.bridgeSession.source, 'bridge_state');
 });
 
 test('_resolveBridgeSession graceful degradation when no bridge-state match', (t) => {

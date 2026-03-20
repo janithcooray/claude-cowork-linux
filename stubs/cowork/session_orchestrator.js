@@ -690,29 +690,20 @@ class SessionOrchestrator {
       trace,
     });
     
-    // If bridge session is available, configure CLI for bridge mode
+    // If bridge session is available, configure CLI for dispatch mode.
+    // The CLI's initEnvLessBridgeCore handles its own /bridge call and
+    // SSE transport setup — we just pass the session ID and activate v2.
     if (bridgeSession) {
-      if (typeof bridgeSession.sessionAccessToken !== 'string' || !bridgeSession.sessionAccessToken.trim()) {
-        trace('WARNING: Bridge session resolved but sessionAccessToken is empty; falling through to legacy path');
-      } else {
-        hostArgs = buildBridgeSpawnArgs(hostArgs, bridgeSession.remoteSessionId, bridgeSession.sdkUrl);
-        Object.assign(translatedEnvVars, {
-          CLAUDE_CODE_ENTRYPOINT: translatedEnvVars.CLAUDE_CODE_ENTRYPOINT || 'claude-desktop',
-          CLAUDE_CODE_ENVIRONMENT_KIND: 'bridge',
-          CLAUDE_CODE_IS_COWORK: '1',
-          CLAUDE_CODE_OAUTH_TOKEN: undefined,
-          CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2: '1',
-          CLAUDE_CODE_SESSION_ACCESS_TOKEN: bridgeSession.sessionAccessToken,
-          CLAUDE_CODE_USE_COWORK_PLUGINS: '1',
-        });
-        trace(
-          '[bridge-creds] env injection: SESSION_ACCESS_TOKEN=present'
-            + ', POST_FOR_SESSION_INGRESS_V2=1'
-            + ', ENVIRONMENT_KIND=bridge'
-            + ', sdk_url=' + (bridgeSession.sdkUrl || 'none')
-        );
-        trace('[bridge-creds] spawn complete: remote session ' + bridgeSession.remoteSessionId);
-      }
+      hostArgs = buildBridgeSpawnArgs(hostArgs, bridgeSession.remoteSessionId);
+      Object.assign(translatedEnvVars, {
+        CLAUDE_CODE_ENTRYPOINT: translatedEnvVars.CLAUDE_CODE_ENTRYPOINT || 'claude-desktop',
+        CLAUDE_CODE_ENVIRONMENT_KIND: 'bridge',
+        CLAUDE_CODE_IS_COWORK: '1',
+        CLAUDE_CODE_USE_CCR_V2: '1',
+        CLAUDE_CODE_USE_COWORK_PLUGINS: '1',
+      });
+      trace('[bridge-creds] env injection: USE_CCR_V2=1, ENVIRONMENT_KIND=bridge'
+        + ', session-id=' + bridgeSession.remoteSessionId);
     }
 
     // Step 11: Check for resume arguments and session metadata
@@ -1014,12 +1005,10 @@ class SessionOrchestrator {
 
   _resolveBridgeSession(context) {
     const {
-      metadataPath,
-      translatedEnvVars,
       trace = () => {},
     } = context || {};
 
-    // Step 1: Read bridge-state.json — find any cse_* remoteSessionId.
+    // Read bridge-state.json — find any cse_* remoteSessionId.
     // There's one dispatch session per environment; all task spawns share it.
     const remoteSessionId = readRemoteSessionIdFromBridgeState({
       bridgeStatePath: this._deps.bridgeStatePath || null,
@@ -1033,34 +1022,13 @@ class SessionOrchestrator {
       return null;
     }
 
-    // Step 2: Fetch bridge credentials via /bridge endpoint
-    if (!this._deps.sessionsApi || typeof this._deps.sessionsApi.fetchBridgeCredentials !== 'function') {
-      trace('[bridge-creds] skipped: sessionsApi.fetchBridgeCredentials not available');
-      return null;
-    }
-
-    const organizationUuid = deriveOrganizationUuidFromMetadataPath(metadataPath);
-    const credResult = this._deps.sessionsApi.fetchBridgeCredentials(remoteSessionId, { organizationUuid });
-
-    trace('[bridge-creds] POST /bridge: status=' + (credResult.statusCode || 'n/a')
-      + ', expires_in=' + (credResult.expiresIn || 'n/a')
-      + ', has_jwt=' + (typeof credResult.workerJwt === 'string' && credResult.workerJwt.length > 0));
-
-    if (!credResult.success) {
-      trace('[bridge-creds] /bridge failed for ' + remoteSessionId + ': ' + (credResult.error || 'unknown'));
-      return null;
-    }
-
-    // Step 3: Build SDK URL from apiBaseUrl
-    const sdkUrl = buildSdkUrl(credResult.apiBaseUrl, remoteSessionId);
-
+    // Don't call /bridge ourselves — the CLI's initEnvLessBridgeCore handles
+    // its own OAuth token exchange and bridge credential fetching internally.
+    // We just need to tell the CLI which session to use and that it should
+    // activate the CCR v2 transport.
     return {
       remoteSessionId,
-      sessionAccessToken: credResult.workerJwt,
-      expiresIn: credResult.expiresIn,
-      apiBaseUrl: credResult.apiBaseUrl,
-      sdkUrl,
-      source: 'bridge_api',
+      source: 'bridge_state',
     };
   }
 

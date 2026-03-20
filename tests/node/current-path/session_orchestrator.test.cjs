@@ -31,6 +31,7 @@ function writeTranscript(sessionDir, projectKey, cliSessionId, lines) {
 function createOrchestrator(overrides) {
   return createSessionOrchestrator({
     appSupportRoot: '/app/support',
+    bridgeStatePath: '/nonexistent/bridge-state.json',
     canonicalizePathForHostAccess: (inputPath) => (
       typeof inputPath === 'string' && inputPath.startsWith('/sessions/demo')
         ? inputPath.replace('/sessions/demo', '/host/sessions/demo')
@@ -186,48 +187,15 @@ test('prepareVmSpawn derives host cwd from translated --add-dir when sharedCwdPa
   assert.equal(result.sharedCwdPath, '/host/sessions/demo/mnt/project');
 });
 
-test('prepareVmSpawn provisions a bridge session via bridge-state.json + /bridge API and emits bridge-style flags/env', (t) => {
+test('prepareVmSpawn activates v2 bridge transport when bridge-state.json has cse_* entry', (t) => {
   const tempRoot = createTempDir(t);
-  const localAgentRoot = path.join(tempRoot, 'claude-local');
-  const sessionId = 'local_demo_session';
-  const metadataPath = path.join(localAgentRoot, 'user', 'org', sessionId + '.json');
-  const configDir = metadataPath.replace(/\.json$/, '') + '/.claude';
-  const workspaceRoot = path.join(tempRoot, 'workspace');
-
-  fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.mkdirSync(workspaceRoot, { recursive: true });
-  fs.writeFileSync(metadataPath, JSON.stringify({
-    sessionId,
-    cliSessionId: 'legacy-cli-session',
-    cwd: workspaceRoot,
-    userSelectedFolders: [workspaceRoot],
-  }, null, 2) + '\n', 'utf8');
-
-  // Bridge-state.json: dict keyed by userId:orgId, one entry per dispatch env
   const bridgePath = path.join(tempRoot, 'bridge-state.json');
   fs.writeFileSync(bridgePath, JSON.stringify({
     'user:org': { remoteSessionId: 'cse_remote-created', localSessionId: 'local_ditto_org' },
   }), 'utf8');
 
-  const seenFetchCalls = [];
-  const sessionStore = createSessionStore({ localAgentRoot });
   const orchestrator = createOrchestrator({
-    sessionStore,
     bridgeStatePath: bridgePath,
-    sessionsApi: {
-      updateAuthToken: () => {},
-      fetchBridgeCredentials(remoteSessionId) {
-        seenFetchCalls.push(remoteSessionId);
-        return {
-          success: true,
-          workerJwt: 'bridge-token',
-          apiBaseUrl: 'https://api.anthropic.com',
-          expiresIn: 3600,
-          statusCode: 200,
-        };
-      },
-    },
   });
 
   const result = orchestrator.prepareVmSpawn({
@@ -235,39 +203,24 @@ test('prepareVmSpawn provisions a bridge session via bridge-state.json + /bridge
     processName: 'demo',
     command: '/usr/local/bin/claude',
     args: ['--resume', 'legacy-cli-session', '--model', 'claude-opus-4-6', '--add-dir', '/sessions/demo/mnt/project'],
-    envVars: {
-      CLAUDE_CONFIG_DIR: configDir,
-    },
+    envVars: {},
     additionalMounts: null,
-    sharedCwdPath: workspaceRoot,
+    sharedCwdPath: '/sessions/demo/mnt/project',
   });
 
   assert.equal(result.success, true);
-  assert.deepEqual(result.args, [
-    '--print',
-    '--session-id',
-    'cse_remote-created',
-    '--input-format',
-    'stream-json',
-    '--output-format',
-    'stream-json',
-    '--replay-user-messages',
-    '--sdk-url',
-    'wss://api.anthropic.com/v1/code/sessions/cse_remote-created',
-    '--model',
-    'claude-opus-4-6',
-    '--add-dir',
-    '/host/sessions/demo/mnt/project',
-  ]);
+  // Args: bridge mode with --session-id, no --sdk-url (CLI builds its own)
+  const sessionIdIdx = result.args.indexOf('--session-id');
+  assert.ok(sessionIdIdx !== -1);
+  assert.equal(result.args[sessionIdIdx + 1], 'cse_remote-created');
+  assert.equal(result.args.indexOf('--sdk-url'), -1, 'no --sdk-url — CLI self-bootstraps');
+  // Env: v2 transport flags, OAuth token preserved
   assert.equal(result.envVars.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
-  assert.equal(result.envVars.CLAUDE_CODE_SESSION_ACCESS_TOKEN, 'bridge-token');
-  assert.equal(result.envVars.CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2, '1');
+  assert.equal(result.envVars.CLAUDE_CODE_USE_CCR_V2, '1');
   assert.equal(result.envVars.CLAUDE_CODE_IS_COWORK, '1');
   assert.equal(result.envVars.CLAUDE_CODE_USE_COWORK_PLUGINS, '1');
-  assert.equal(seenFetchCalls.length, 1);
-  assert.equal(seenFetchCalls[0], 'cse_remote-created');
   assert.ok(result.bridgeSession);
-  assert.equal(result.bridgeSession.source, 'bridge_api');
+  assert.equal(result.bridgeSession.source, 'bridge_state');
 });
 
 test('prepareFlatlineRetry clears only cliSessionId and removes --resume for the fresh retry', (t) => {
@@ -564,37 +517,8 @@ test('prepareVmSpawn injects spawn-time OAuth token before bridge resolution', (
   assert.strictEqual(updateValue, 'test-oauth-token-value');
 });
 
-test('bridge with empty sessionAccessToken falls through to legacy path', (t) => {
-  const tempRoot = createTempDir(t);
-  const localAgentRoot = path.join(tempRoot, 'claude-local');
-  const sessionId = 'local_session_1';
-  const metadataPath = path.join(localAgentRoot, 'user', 'org', sessionId + '.json');
-  const configDir = metadataPath.replace(/\.json$/, '') + '/.claude';
-
-  fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(metadataPath, JSON.stringify({
-    sessionId,
-  }, null, 2) + '\n', 'utf8');
-
-  const mockApi = {
-    updateAuthToken() {},
-    isConfigured() { return true; },
-    ensureSession() {
-      return {
-        success: true,
-        remoteSessionId: 'remote-123',
-        sessionAccessToken: '',
-        source: 'created',
-      };
-    },
-  };
-
-  const sessionStore = createSessionStore({ localAgentRoot });
-  const orchestrator = createOrchestrator({
-    sessionStore,
-    sessionsApi: mockApi,
-  });
+test('no bridge activation when bridge-state.json is missing', () => {
+  const orchestrator = createOrchestrator();
 
   const result = orchestrator.prepareVmSpawn({
     processId: 'test-process',
@@ -602,13 +526,13 @@ test('bridge with empty sessionAccessToken falls through to legacy path', (t) =>
     args: ['--resume', 'cc-123'],
     envVars: {
       CLAUDE_CODE_OAUTH_TOKEN: 'test-oauth-token-value',
-      CLAUDE_CONFIG_DIR: configDir,
     },
   });
 
   assert.ok(result.success);
   assert.notStrictEqual(result.envVars.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
   assert.strictEqual(result.envVars.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth-token-value');
+  assert.equal(result.bridgeSession, null);
 });
 
 test('dualWriteEvent fires postEvents for assistant events when bridge is active', () => {

@@ -107,6 +107,7 @@ function runSwiftRetryHarness(options) {
     env: {
       ...process.env,
       HOME: tempHome,
+      XDG_CONFIG_HOME: path.join(tempHome, '.config'),
       FLATLINE_ATTEMPT_FILE: attemptFile,
     },
     encoding: 'utf8',
@@ -128,18 +129,10 @@ function runSwiftBridgeHarness(options) {
 
   const script = `
     const fs = require('fs');
-    global.__coworkSessionsApiRequestSync = (request) => {
-      if (request.method === 'POST' && /\\/bridge$/.test(request.url)) {
-        return {
-          statusCode: 200,
-          body: JSON.stringify({
-            worker_jwt: 'bridge-token',
-            api_base_url: 'https://api.anthropic.com',
-            expires_in: 3600,
-          }),
-        };
-      }
-      throw new Error('Unexpected sessions API request: ' + request.method + ' ' + request.url);
+    // No API mock needed — bridge resolution reads bridge-state.json only,
+    // CLI self-bootstraps its own /bridge call via CLAUDE_CODE_USE_CCR_V2
+    global.__coworkSessionsApiRequestSync = () => {
+      throw new Error('Unexpected sessions API request — orchestrator should not call API');
     };
 
     const addon = require(${JSON.stringify(modulePath)});
@@ -276,25 +269,14 @@ test('claude-swift provisions a remote session via bridge-state.json and /bridge
 
   assert.equal(result.exits.length, 1);
   assert.equal(result.exits[0].code, 0);
-  assert.deepEqual(spawnedArgs, [
-    '--print',
-    '--session-id',
-    'cse_remote-created',
-    '--input-format',
-    'stream-json',
-    '--output-format',
-    'stream-json',
-    '--replay-user-messages',
-    '--sdk-url',
-    'wss://api.anthropic.com/v1/code/sessions/cse_remote-created',
-    '--model',
-    'claude-opus-4-6',
-  ]);
+  // Args: bridge mode with --session-id cse_*, no --sdk-url (CLI self-bootstraps)
+  const sessionIdIdx = spawnedArgs.indexOf('--session-id');
+  assert.ok(sessionIdIdx !== -1);
+  assert.equal(spawnedArgs[sessionIdIdx + 1], 'cse_remote-created');
+  assert.equal(spawnedArgs.indexOf('--sdk-url'), -1);
+  // Env: v2 transport, OAuth preserved for CLI self-bootstrap
   assert.equal(spawnedEnv.CLAUDE_CODE_ENTRYPOINT, 'claude-desktop');
   assert.equal(spawnedEnv.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
-  assert.equal(spawnedEnv.CLAUDE_CODE_OAUTH_TOKEN, null);
-  assert.equal(spawnedEnv.CLAUDE_CODE_SESSION_ACCESS_TOKEN, 'bridge-token');
-  assert.equal(spawnedEnv.CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2, '1');
   assert.equal(spawnedEnv.CLAUDE_CODE_IS_COWORK, '1');
   assert.equal(spawnedEnv.CLAUDE_CODE_USE_COWORK_PLUGINS, '1');
   assert.equal(result.metadata.sessionId, 'local_demo_session');

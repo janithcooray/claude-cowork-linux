@@ -1219,15 +1219,6 @@ class SwiftAddonStub extends EventEmitter {
           preparedSpawn.sharedCwdPath
         );
 
-        // Schedule bridge credential refresh if bridge session was resolved
-        if (preparedSpawn.bridgeSession && spawnResult && spawnResult.success !== false) {
-          const proc = self._processes.get(id);
-          const stdinWriter = proc && proc.stdin
-            ? (data) => { proc.stdin.write(data); }
-            : null;
-          self._sessionOrchestrator.scheduleBridgeRefresh(id, preparedSpawn.bridgeSession, stdinWriter);
-        }
-
         return spawnResult;
       },
 
