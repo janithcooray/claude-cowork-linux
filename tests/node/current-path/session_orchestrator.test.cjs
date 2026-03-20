@@ -689,3 +689,123 @@ test('buildRetryInput returns null for null input', () => {
   const orchestrator = createOrchestrator();
   assert.strictEqual(orchestrator.buildRetryInput(null), null);
 });
+
+test('normalizeSessionRecord delegates to sessionStore', () => {
+  const orchestrator = createOrchestrator({
+    sessionStore: {
+      normalizeSessionRecord(data) {
+        return { ...data, repaired: true };
+      },
+    },
+  });
+  const result = orchestrator.normalizeSessionRecord({ sessionId: 'local_test' });
+  assert.deepStrictEqual(result, { sessionId: 'local_test', repaired: true });
+});
+
+test('normalizeSessionRecord passes through when no sessionStore', () => {
+  const orchestrator = createOrchestrator({ sessionStore: null });
+  const input = { sessionId: 'local_test' };
+  assert.strictEqual(orchestrator.normalizeSessionRecord(input), input);
+});
+
+// --- Phase 3: SDK message transformation tests ---
+
+const {
+  transformSdkMessages,
+  mergeConsecutiveAssistantMessages,
+  mergeAssistantSdkMessages,
+  isAssistantSdkMessage,
+  filterTranscriptMessages,
+} = require('../../../stubs/cowork/session_orchestrator.js');
+
+test('transformSdkMessages strips metadata and ignored types from message list', () => {
+  const messages = [
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'a1', content: [{ type: 'text', text: 'hi' }] } },
+    { type: 'queue-operation', operations: [] },
+    { type: 'progress', current: 1, total: 5 },
+    { type: 'last-prompt', text: 'hello' },
+    { type: 'rate_limit_event', retryAfter: 5 },
+    { type: 'user', message: { type: 'message', role: 'user', content: [{ type: 'text', text: 'bye' }] } },
+  ];
+  const result = transformSdkMessages(messages, null);
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0].type, 'assistant');
+  assert.strictEqual(result[1].type, 'user');
+});
+
+test('transformSdkMessages strips nested metadata types inside message wrappers', () => {
+  const messages = [
+    { type: 'message', message: { type: 'queue-operation', operations: [] } },
+    { type: 'message', message: { type: 'progress', current: 1 } },
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'a1', content: [{ type: 'text', text: 'ok' }] } },
+  ];
+  const result = transformSdkMessages(messages, null);
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0].type, 'assistant');
+});
+
+test('transformSdkMessages passes through non-array input', () => {
+  assert.strictEqual(transformSdkMessages(null), null);
+  assert.strictEqual(transformSdkMessages('hello'), 'hello');
+});
+
+test('mergeConsecutiveAssistantMessages merges same-id assistant messages', () => {
+  const messages = [
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'msg_1', content: [{ type: 'text', text: 'hello ' }] } },
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'msg_1', content: [{ type: 'text', text: 'hello world' }] } },
+  ];
+  const result = mergeConsecutiveAssistantMessages(messages);
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0].message.content[0].text, 'hello world');
+});
+
+test('mergeConsecutiveAssistantMessages keeps different-id messages separate', () => {
+  const messages = [
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'msg_1', content: [{ type: 'text', text: 'a' }] } },
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'msg_2', content: [{ type: 'text', text: 'b' }] } },
+  ];
+  const result = mergeConsecutiveAssistantMessages(messages);
+  assert.strictEqual(result.length, 2);
+});
+
+test('mergeAssistantSdkMessages returns null for non-assistant or mismatched IDs', () => {
+  assert.strictEqual(mergeAssistantSdkMessages(null, null), null);
+  assert.strictEqual(mergeAssistantSdkMessages(
+    { type: 'user', message: { type: 'message', role: 'user', content: [] } },
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'a', content: [] } },
+  ), null);
+  assert.strictEqual(mergeAssistantSdkMessages(
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'a', content: [] } },
+    { type: 'assistant', message: { type: 'message', role: 'assistant', id: 'b', content: [] } },
+  ), null);
+});
+
+test('isAssistantSdkMessage validates message shape', () => {
+  assert.strictEqual(isAssistantSdkMessage(null), false);
+  assert.strictEqual(isAssistantSdkMessage({ type: 'user' }), false);
+  assert.strictEqual(isAssistantSdkMessage({
+    type: 'assistant',
+    message: { type: 'message', role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+  }), true);
+});
+
+test('filterTranscriptMessages removes ignored types from arrays', () => {
+  const input = [
+    { type: 'assistant', message: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'queue-operation' },
+    { type: 'progress' },
+    { type: 'last-prompt' },
+    { type: 'rate_limit_event' },
+    { type: 'message', message: { type: 'queue-operation' } },
+    { type: 'user', message: { type: 'message', role: 'user', content: [] } },
+  ];
+  const result = filterTranscriptMessages(input);
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0].type, 'assistant');
+  assert.strictEqual(result[1].type, 'user');
+});
+
+test('filterTranscriptMessages passes through non-array input', () => {
+  assert.strictEqual(filterTranscriptMessages(null), null);
+  assert.strictEqual(filterTranscriptMessages('string'), 'string');
+});
