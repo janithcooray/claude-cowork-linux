@@ -1065,8 +1065,17 @@ class SessionOrchestrator {
     };
   }
 
+  // --- Phase 2: Session record normalization ---
+  // Public API — delegates to sessionStore which owns the implementation.
+  // Callers should use this instead of sessionStore.normalizeSessionRecord() directly.
+  normalizeSessionRecord(sessionData) {
+    if (!this._sessionStore || typeof this._sessionStore.normalizeSessionRecord !== 'function') {
+      return sessionData;
+    }
+    return this._sessionStore.normalizeSessionRecord(sessionData);
+  }
+
   // --- NORM-103 TARGET: live event dispatch (Phase 4) ---
-  // --- NORM-104 TARGET: metadata persistence stays in session_store.js ---
 }
 
 // Phase 1: Message type filtering — constants and functions live in

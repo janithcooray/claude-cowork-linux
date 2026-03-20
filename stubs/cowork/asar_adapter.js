@@ -345,15 +345,13 @@ class AsarAdapter {
       return filterTranscriptMessages(result);
     }
     if (normalizedChannel.includes('getsession')) {
-      // @session-refactor:NORM-020 CALLER — normalize single session record
-      return this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
-        ? this._sessionStore.normalizeSessionRecord(result)
+      return this._sessionOrchestrator
+        ? this._sessionOrchestrator.normalizeSessionRecord(result)
         : result;
     }
     if (normalizedChannel.includes('getall') && Array.isArray(result)) {
-      // @session-refactor:NORM-020 CALLER — normalize array of session records
-      return this._sessionStore && typeof this._sessionStore.normalizeSessionRecord === 'function'
-        ? result.map((entry) => this._sessionStore.normalizeSessionRecord(entry))
+      return this._sessionOrchestrator
+        ? result.map((entry) => this._sessionOrchestrator.normalizeSessionRecord(entry))
         : result;
     }
     return result;
