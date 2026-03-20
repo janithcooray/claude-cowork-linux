@@ -1805,7 +1805,11 @@ function symlinkGlobalConfig(sessionClaudeDir, trace = () => {}) {
 }
 
 function createSessionOrchestrator(deps) {
-  return new SessionOrchestrator(deps);
+  const orchestrator = new SessionOrchestrator(deps);
+  // Expose for patchEventDispatch in frame-fix-wrapper.js (bootstraps before
+  // the orchestrator exists, upgrades to full normalization once available).
+  global.__coworkSessionOrchestrator = orchestrator;
+  return orchestrator;
 }
 
 module.exports = {
