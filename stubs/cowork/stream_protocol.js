@@ -1,5 +1,6 @@
 'use strict';
 
+// @session-refactor:NORM-010 DEFINITION — filter ignored types from raw SDK stdout lines (subset: queue-operation, rate_limit_event)
 function getIgnoredSdkMessageType(line) {
   if (typeof line !== 'string') {
     return null;

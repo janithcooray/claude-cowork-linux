@@ -9,7 +9,7 @@ and `local_session_ipc_adapter.js` are deleted.
 
 ## Current State
 
-Session normalization is scattered across 6 files with 7 confirmed duplicates.
+Session normalization is scattered across 8 files with 9 confirmed duplicates.
 Every touchpoint is annotated with `@session-refactor:NORM-NNN` tags
 (see `docs/session-normalization-manifest.md` for the full index).
 
@@ -20,6 +20,8 @@ session_store.js        20 tags   (normalizeSessionRecord, metadata persistence)
 local_session_bridge.js 76 tags   (SDK transform, live dispatch, duplicates of above)
 local_session_ipc_adapter.js 3 tags (thin IPC wrapper)
 session_orchestrator.js  5 tags   (TARGET insertion points, no logic yet)
+transcript_store.js      1 tag    (IGNORED_MESSAGE_TYPES — same 4 values as NORM-001)
+stream_protocol.js       1 tag    (getIgnoredSdkMessageType — subset filter)
 ```
 
 ## Execution Order
@@ -31,7 +33,7 @@ is independently testable — the codebase works after every phase.
 
 **What moves:** The ignored/handled type sets and the filtering functions.
 
-**Tags:** NORM-001, NORM-002, NORM-003, NORM-004, NORM-005, NORM-007, NORM-008
+**Tags:** NORM-001, NORM-002, NORM-003, NORM-004, NORM-005, NORM-007, NORM-008, NORM-009, NORM-010
 
 **Current locations:**
 - `IGNORED_LIVE_MESSAGE_TYPES` in frame-fix-wrapper.js (4 types)
@@ -41,6 +43,8 @@ is independently testable — the codebase works after every phase.
 - `getIgnoredLiveMessageType()` in frame-fix-wrapper.js
 - `getIgnoredLiveMessageType()` in local_session_bridge.js (duplicate)
 - `filterTranscriptMessages()` in asar_adapter.js
+- `IGNORED_MESSAGE_TYPES` in transcript_store.js (4 types, same values as NORM-001)
+- `getIgnoredSdkMessageType()` in stream_protocol.js (subset: queue-operation, rate_limit_event)
 
 **Consolidation:**
 

@@ -16,6 +16,8 @@ This manifest catalogs all session normalization logic scattered across the clau
 | NORM-006 | DEFINITION | stubs/cowork/asar_adapter.js | 360 | normalize IPC results (filter transcripts, repair session records) |
 | NORM-007 | DEFINITION | linux-app-extracted/cowork/local_session_bridge.js | 4 | metadata message types to extract and accumulate (not forward as regular messages) |
 | NORM-008 | DEFINITION | linux-app-extracted/cowork/local_session_bridge.js | 1137 | check if live event should be dropped (DUPLICATE of NORM-003) |
+| NORM-009 | DEFINITION | stubs/cowork/transcript_store.js | 4 | message types to exclude from transcript conversation analysis (same 4 values as NORM-001, NORM-004) |
+| NORM-010 | DEFINITION | stubs/cowork/stream_protocol.js | 3 | filter ignored types from raw SDK stdout lines (subset: queue-operation, rate_limit_event) |
 | NORM-020 | DEFINITION | stubs/cowork/session_store.js | 317 | normalize session record (top-level entry point) |
 | NORM-021 | DEFINITION | stubs/cowork/session_store.js | 470 | normalize session record with metadata path context (cwd repair, cliSessionId selection) |
 | NORM-022 | ANNOTATION | stubs/cowork/session_store.js | 493 | recover preferred root from audit.jsonl if userSelectedFolders is empty |
@@ -61,6 +63,8 @@ This manifest catalogs all session normalization logic scattered across the clau
 | NORM-080 | NORM-084 | Same logic, NORM-084 adds logging |
 | NORM-081 | NORM-085 | Exact duplicate |
 | NORM-082 | NORM-086 | NORM-086 adds reentrancy guard |
+| NORM-001 | NORM-009 | Same 4 values, transcript_store.js for conversation analysis |
+| NORM-010 | NORM-001 (partial) | Subset (queue-operation, rate_limit_event) in stream_protocol.js |
 
 ## Consolidation Plan by Concern
 
@@ -74,6 +78,8 @@ This manifest catalogs all session normalization logic scattered across the clau
 - NORM-005: asar_adapter.js filterTranscriptMessages
 - NORM-007: local_session_bridge.js HANDLED_LIVE_METADATA_MESSAGE_TYPES
 - NORM-008: local_session_bridge.js getIgnoredLiveMessageType (duplicate of NORM-003)
+- NORM-009: transcript_store.js IGNORED_MESSAGE_TYPES (same 4 values as NORM-001/NORM-004)
+- NORM-010: stream_protocol.js getIgnoredSdkMessageType (subset: queue-operation, rate_limit_event)
 
 **Consolidation target:** NORM-100
 **Proposed signature:** `filterMessagesByType(messages, filterConfig)`

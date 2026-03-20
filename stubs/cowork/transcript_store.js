@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
+// @session-refactor:NORM-009 DEFINITION — message types to exclude from transcript conversation analysis (same 4 values as NORM-001, NORM-004)
 const IGNORED_MESSAGE_TYPES = new Set([
   'last-prompt',
   'progress',
