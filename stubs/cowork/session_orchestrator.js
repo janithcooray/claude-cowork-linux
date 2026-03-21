@@ -352,15 +352,11 @@ function deriveOrganizationUuidFromMetadataPath(metadataPath) {
 // Returns the first remoteSessionId (cse_*) found, regardless of which
 // task session is being spawned.
 
-const BRIDGE_STATE_MAX_RETRIES = 5;
-const BRIDGE_STATE_RETRY_DELAY_MS = 100;
-
 function readRemoteSessionIdFromBridgeState(deps) {
   const {
     bridgeStatePath,
     readFileSync = fs.readFileSync,
     trace = () => {},
-    waitMs = BRIDGE_STATE_RETRY_DELAY_MS,
   } = deps || {};
 
   const defaultBridgePath = path.join(
@@ -371,64 +367,50 @@ function readRemoteSessionIdFromBridgeState(deps) {
     ? bridgeStatePath
     : defaultBridgePath;
 
-  for (let attempt = 0; attempt < BRIDGE_STATE_MAX_RETRIES; attempt++) {
-    let raw;
-    try {
-      raw = readFileSync(filePath, 'utf8');
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        if (attempt === 0) {
-          trace('[bridge-creds] bridge-state.json: missing (' + filePath + ')');
-        }
-      } else {
-        trace('[bridge-creds] bridge-state.json: read error: ' + err.message);
-        return null;
-      }
-      if (attempt < BRIDGE_STATE_MAX_RETRIES - 1) {
-        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs); } catch (_) {}
-      }
-      continue;
+  // Single read attempt — the file is either present or not.
+  // Retrying with Atomics.wait blocked the main process ~400ms for the
+  // common non-dispatch case where the file simply doesn't exist.
+  let raw;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      trace('[bridge-creds] bridge-state.json: missing (' + filePath + ')');
+    } else {
+      trace('[bridge-creds] bridge-state.json: read error: ' + err.message);
     }
+    return null;
+  }
 
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      trace('[bridge-creds] bridge-state.json: parse-error: ' + err.message);
-      return null;
-    }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    trace('[bridge-creds] bridge-state.json: parse-error: ' + err.message);
+    return null;
+  }
 
-    // Real schema: dict keyed by "userId:orgId", values are session entries
-    const entries = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? Object.entries(parsed).filter(([, v]) => v && typeof v === 'object')
-      : (Array.isArray(parsed) ? parsed.map((v, i) => [String(i), v]) : []);
+  // Real schema: dict keyed by "userId:orgId", values are session entries
+  const entries = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.entries(parsed).filter(([, v]) => v && typeof v === 'object')
+    : (Array.isArray(parsed) ? parsed.map((v, i) => [String(i), v]) : []);
 
-    // Schema canary on first read
-    if (attempt === 0 && entries.length > 0) {
-      const fieldNames = Object.keys(entries[0][1]).sort();
-      trace('[bridge-creds] bridge-state.json schema: entryCount=' + entries.length
-        + ', fieldNames=[' + fieldNames.join(',') + ']');
-    }
+  if (entries.length > 0) {
+    const fieldNames = Object.keys(entries[0][1]).sort();
+    trace('[bridge-creds] bridge-state.json schema: entryCount=' + entries.length
+      + ', fieldNames=[' + fieldNames.join(',') + ']');
+  }
 
-    for (const [key, entry] of entries) {
-      if (!entry || typeof entry !== 'object') continue;
-      if (typeof entry.remoteSessionId === 'string' && entry.remoteSessionId.startsWith('cse_')) {
-        trace('[bridge-creds] found remoteSessionId=' + entry.remoteSessionId
-          + ' (from key=' + key + ', localSessionId=' + (entry.localSessionId || 'n/a') + ')');
-        return entry.remoteSessionId;
-      }
-    }
-
-    // No entry yet — file may not be fully written
-    if (attempt === 0) {
-      trace('[bridge-creds] bridge-state.json: no cse_* entry found');
-    }
-    if (attempt < BRIDGE_STATE_MAX_RETRIES - 1) {
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs); } catch (_) {}
+  for (const [key, entry] of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.remoteSessionId === 'string' && entry.remoteSessionId.startsWith('cse_')) {
+      trace('[bridge-creds] found remoteSessionId=' + entry.remoteSessionId
+        + ' (from key=' + key + ', localSessionId=' + (entry.localSessionId || 'n/a') + ')');
+      return entry.remoteSessionId;
     }
   }
 
-  trace('[bridge-creds] bridge-state.json: no cse_* entry after ' + BRIDGE_STATE_MAX_RETRIES + ' attempts');
+  trace('[bridge-creds] bridge-state.json: no cse_* entry found');
   return null;
 }
 
@@ -661,7 +643,6 @@ class SessionOrchestrator {
     // bridge-state.json has one entry per dispatch environment — all task
     // spawns share the same remoteSessionId (cse_*).
     const metadataPath = deriveSessionMetadataPath(hostConfigDir);
-    const localSessionInfo = this._getLocalSessionInfo(metadataPath);
     const bridgeSession = this._resolveBridgeSession({
       metadataPath,
       translatedEnvVars,

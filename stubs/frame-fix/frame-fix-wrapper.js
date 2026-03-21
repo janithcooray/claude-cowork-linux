@@ -51,7 +51,9 @@ if (process.env.CLAUDE_DEVTOOLS === '1') console.log('[Frame Fix] DevTools mode 
           + ' sessionId=' + e.sessionId
           + ' hasSession=' + !!session
           + ' hasTransport=' + !!(session && session.transport));
-        if (!session || e.type !== 'message' || !e.message) return;
+        if (!session || e.type !== 'message' || !e.message) {
+          return originalForwardEvent(e);
+        }
 
         // For types the original would NOT drop, call the original
         if (msgType !== 'result' && msgType !== 'stream_event') {
@@ -677,7 +679,7 @@ async function getCoworkProcessRunningState(processId) {
   return { running: false, exitCode: 0 };
 }
 
-// Delegates to consolidated isIgnoredLiveEventType in session_orchestrator.js
+// Delegates to consolidated isIgnoredLiveEventType in session_normalization.js
 function getIgnoredLiveMessageType(channel, payload) {
   return isIgnoredLiveEventType(channel, payload);
 }

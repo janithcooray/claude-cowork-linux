@@ -88,25 +88,19 @@ test('readRemoteSessionIdFromBridgeState returns null when no cse_* entries', (t
   assert.ok(traces.some((m) => m.includes('no cse_* entry')));
 });
 
-test('readRemoteSessionIdFromBridgeState retries when file appears later', (t) => {
+test('readRemoteSessionIdFromBridgeState returns null on ENOENT without retrying', (t) => {
   let readCount = 0;
   const result = readRemoteSessionIdFromBridgeState({
     bridgeStatePath: '/fake/path',
     readFileSync: () => {
       readCount++;
-      if (readCount < 3) {
-        const err = new Error('ENOENT');
-        err.code = 'ENOENT';
-        throw err;
-      }
-      return JSON.stringify({
-        'u:o': { remoteSessionId: 'cse_found' },
-      });
+      const err = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
     },
-    waitMs: 1,
   });
-  assert.equal(result, 'cse_found');
-  assert.equal(readCount, 3);
+  assert.equal(result, null);
+  assert.equal(readCount, 1);
 });
 
 test('readRemoteSessionIdFromBridgeState skips non-object values in dict', (t) => {
