@@ -794,6 +794,18 @@ Module.prototype.require = function(id) {
     global.__coworkElectronPatched = true;
     console.log('[Frame Fix] Intercepting electron module');
 
+    // Spoof user agent to macOS so the webapp shows the correct branding
+    // and auth flows (Google OAuth checks UA for platform compatibility).
+    // Without this, the webapp sees "Linux" in the UA and falls through
+    // to "Claude for Windows" or breaks Google auth.
+    const app = resolveElectronApp(module);
+    if (app) {
+      const electronVersion = process.versions.electron || '33.0.0';
+      const chromeVersion = process.versions.chrome || '130.0.0.0';
+      app.userAgentFallback = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/' + (app.getVersion ? app.getVersion() : '1.0.0') + ' Chrome/' + chromeVersion + ' Electron/' + electronVersion + ' Safari/537.36';
+      console.log('[Frame Fix] User agent spoofed to macOS');
+    }
+
     // Intercept ipcMain.handle to inject our VM handlers
     const { ipcMain } = module;
     // Hoisted to outer scope so webContents.ipc.handle() patch can reference them
