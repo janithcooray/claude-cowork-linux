@@ -44,10 +44,14 @@ if (process.env.CLAUDE_DEVTOOLS === '1') console.log('[Frame Fix] DevTools mode 
         // The original filter drops result/stream_event. We need those
         // forwarded on Linux since there's no VM proxy to handle it.
         const session = bridge.activeSessions && bridge.activeSessions.get(e.sessionId);
-        if (!session || e.type !== 'message' || !e.message) return;
-
         const msg = e.message;
-        const msgType = msg.type;
+        const msgType = msg && msg.type;
+        console.log('[bridge-patch] forwardEvent called: type=' + e.type
+          + ' msgType=' + msgType
+          + ' sessionId=' + e.sessionId
+          + ' hasSession=' + !!session
+          + ' hasTransport=' + !!(session && session.transport));
+        if (!session || e.type !== 'message' || !e.message) return;
 
         // For types the original would NOT drop, call the original
         if (msgType !== 'result' && msgType !== 'stream_event') {
