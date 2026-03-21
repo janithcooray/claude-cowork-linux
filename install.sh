@@ -58,28 +58,9 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 confirm_destructive_removal() {
     local target="$1"
     local reason="$2"
-    local command_display="rm -rf \"$target\""
 
     [[ -e "$target" ]] || return 0
-
-    if [[ "$INSTALL_FORCE" == "1" || "${CLAUDE_INSTALL_FORCE:-}" == "1" ]]; then
-        log_warn "$reason"
-        log_info "Proceeding due to --force: $command_display"
-        return 0
-    fi
-
-    if [[ ! -t 0 ]]; then
-        die "$reason Refusing to run without interactive confirmation. Re-run with --force. Command: $command_display"
-    fi
-
-    log_warn "$reason"
-    log_warn "About to run: $command_display"
-    printf 'Type "yes" to continue: '
-
-    local confirmation=""
-    read -r confirmation
-    log_info "Confirmation response: ${confirmation:-<empty>}"
-    [[ "$confirmation" == "yes" ]] || die "Aborted removal of $target"
+    log_info "$reason Replacing..."
 }
 
 format_size() {
