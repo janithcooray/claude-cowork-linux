@@ -405,12 +405,20 @@ extract_archive() {
 
 install_stubs() {
     local target_dir="$INSTALL_DIR/linux-app-extracted"
+    local script_dir
+    script_dir=$(cd "$(dirname "$0")" && pwd)
 
-    log_info "Installing stubs..."
+    # Prefer stubs from the script directory (where install.sh was invoked)
+    # over the install directory (may be stale if git pull failed).
+    local stub_src="$script_dir"
+    if [[ ! -d "$stub_src/stubs" ]]; then
+        stub_src="$INSTALL_DIR"
+    fi
 
-    # Copy stubs from the repo into the extracted app's node_modules
-    local swift_src="$INSTALL_DIR/stubs/@ant/claude-swift/js/index.js"
-    local native_src="$INSTALL_DIR/stubs/@ant/claude-native/index.js"
+    log_info "Installing stubs from $stub_src..."
+
+    local swift_src="$stub_src/stubs/@ant/claude-swift/js/index.js"
+    local native_src="$stub_src/stubs/@ant/claude-native/index.js"
 
     [[ -f "$swift_src" ]] || die "Swift stub not found: $swift_src"
     [[ -f "$native_src" ]] || die "Native stub not found: $native_src"
@@ -421,19 +429,24 @@ install_stubs() {
     cp "$swift_src" "$target_dir/node_modules/@ant/claude-swift/js/index.js"
     cp "$native_src" "$target_dir/node_modules/@ant/claude-native/index.js"
 
-    # Copy frame-fix files if present in repo
+    # Copy frame-fix files
     for f in frame-fix-wrapper.js frame-fix-entry.js; do
-        if [[ -f "$INSTALL_DIR/stubs/frame-fix/$f" ]]; then
-            cp "$INSTALL_DIR/stubs/frame-fix/$f" "$target_dir/$f"
-        elif [[ -f "$INSTALL_DIR/$f" ]]; then
-            cp "$INSTALL_DIR/$f" "$target_dir/$f"
+        if [[ -f "$stub_src/stubs/frame-fix/$f" ]]; then
+            cp "$stub_src/stubs/frame-fix/$f" "$target_dir/$f"
         fi
     done
 
     # Copy cowork orchestration modules
-    if [[ -d "$INSTALL_DIR/stubs/cowork" ]]; then
+    if [[ -d "$stub_src/stubs/cowork" ]]; then
         mkdir -p "$target_dir/cowork"
-        cp -f "$INSTALL_DIR"/stubs/cowork/*.js "$target_dir/cowork/"
+        cp -f "$stub_src"/stubs/cowork/*.js "$target_dir/cowork/"
+    fi
+
+    # Also sync stubs into the install dir's stubs/ so future launches
+    # from the install dir (via claude-desktop launcher) use current code
+    if [[ "$stub_src" != "$INSTALL_DIR" && -d "$INSTALL_DIR" ]]; then
+        log_info "Syncing stubs to install dir..."
+        cp -rf "$stub_src/stubs" "$INSTALL_DIR/"
     fi
 
     log_success "Stubs installed"
@@ -445,12 +458,15 @@ install_stubs() {
 
 apply_patches() {
     local index_js="$INSTALL_DIR/linux-app-extracted/.vite/build/index.js"
+    local script_dir
+    script_dir=$(cd "$(dirname "$0")" && pwd)
     local patch_script=""
 
-    if [[ -f "$INSTALL_DIR/enable-cowork.py" ]]; then
+    # Prefer script dir (invoked source) over install dir (may be stale)
+    if [[ -f "$script_dir/enable-cowork.py" ]]; then
+        patch_script="$script_dir/enable-cowork.py"
+    elif [[ -f "$INSTALL_DIR/enable-cowork.py" ]]; then
         patch_script="$INSTALL_DIR/enable-cowork.py"
-    elif [[ -f "$(dirname "$0")/enable-cowork.py" ]]; then
-        patch_script="$(dirname "$0")/enable-cowork.py"
     fi
 
     if [[ -n "$patch_script" && -f "$index_js" ]]; then
