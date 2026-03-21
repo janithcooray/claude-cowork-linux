@@ -529,6 +529,16 @@ const PROACTIVE_ONLY_SUFFIXES = new Set([
   'ComputerUseTcc_$_getCurrentSessionGrants',
   'ComputerUseTcc_$_revokeGrant',
   'CoworkSpaces_$_getAllSpaces',
+  // Startup — Linux has no macOS login items. The asar's handler calls
+  // app.getLoginItemSettings() which crashes on Linux. The asar registers
+  // these on webContents.ipc.handle() which our patch intercepts, but
+  // contents.ipc.removeHandler() (unpatched) can clear the override before
+  // the settings page invokes them. Proactive registration on ipcMain
+  // provides a stable fallback protected from removal.
+  'Startup_$_isStartupOnLoginEnabled',
+  'Startup_$_setStartupOnLoginEnabled',
+  'Startup_$_isMenuBarEnabled',
+  'Startup_$_setMenuBarEnabled',
 ]);
 
 const EIPC_NAMESPACES = ['claude.web', 'claude.hybrid', 'claude.settings'];

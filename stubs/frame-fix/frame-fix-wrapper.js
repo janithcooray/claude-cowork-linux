@@ -863,6 +863,26 @@ Module.prototype.require = function(id) {
           if (isProactiveChannel(channel)) return; // Already registered proactively
           return originalHandle(channel, overrideHandler);
         }
+
+        // Debounce connect-to-mcp-server: the renderer fires duplicate connect
+        // requests because mcp-server-auto-reconnect and mcpConfigChange both
+        // arrive within ~1ms, each triggering a connect call. The asar's handler
+        // already deduplicates (won't double-launch), but the IPC round-trips
+        // add noise and latency. Coalesce calls for the same server within 2s.
+        if (channel === 'connect-to-mcp-server') {
+          const _mcpConnectTimes = new Map();
+          const wrappedHandler = async function(event, serverName) {
+            const now = Date.now();
+            const lastConnect = _mcpConnectTimes.get(serverName);
+            if (lastConnect && (now - lastConnect) < 2000) {
+              return; // Already connecting this server
+            }
+            _mcpConnectTimes.set(serverName, now);
+            return handler(event, serverName);
+          };
+          return originalHandle(channel, wrappedHandler);
+        }
+
         return originalHandle(channel, asarAdapter.wrapHandler(channel, handler));
       };
 
@@ -911,6 +931,11 @@ Module.prototype.require = function(id) {
       });
     }
 
+    // MCP reconnect dedup: suppress auto-reconnect sends that overlap with
+    // mcpConfigChange (both fire within ~1ms, causing the renderer to send
+    // duplicate connect-to-mcp-server calls for each server).
+    let _lastMcpConfigChangeTs = 0;
+
     function patchEventDispatch(contents) {
       if (!contents || _sendPatched.has(contents) || typeof contents.send !== 'function') {
         return;
@@ -924,6 +949,20 @@ Module.prototype.require = function(id) {
           logIgnoredLiveMessage(channel, args[0], ignoredType);
           return false;
         }
+
+        // MCP dedup: track mcpConfigChange timing and suppress overlapping
+        // auto-reconnect sends. Both arrive within ~1ms; the config change
+        // already tells the renderer which servers need reconnection.
+        if (typeof channel === 'string') {
+          if (channel.includes('mcpConfigChange')) {
+            _lastMcpConfigChangeTs = Date.now();
+          } else if (channel === 'mcp-server-auto-reconnect') {
+            if (Date.now() - _lastMcpConfigChangeTs < 500) {
+              return false;
+            }
+          }
+        }
+
         return originalSend(channel, ...args);
       };
     }
@@ -958,6 +997,52 @@ Module.prototype.require = function(id) {
           return origIpcHandle(channel, asarAdapter.wrapHandler(channel, handler));
         };
         console.log('[Cowork] webContents.ipc.handle() patched for override interception');
+      }
+
+      // Patch webContents.ipc.on() to fix origin validation for file:// preloads.
+      // The asar's DesktopIntl_getInitialLocale handler uses sendSync (ipc.on) and
+      // validates senderFrame.url origin. Since we run via `electron .asar` rather
+      // than a packaged app, app.isPackaged=false, so the file:// origin check
+      // fails. The preload crashes before contextBridge.exposeInMainWorld("process")
+      // runs, causing "process is not defined" in renderers.
+      //
+      // Fix: wrap the handler so origin validation sees a passing origin.
+      if (contents.ipc && typeof contents.ipc.on === 'function' && !contents.ipc.__coworkOnPatched) {
+        contents.ipc.__coworkOnPatched = true;
+        const origIpcOn = contents.ipc.on.bind(contents.ipc);
+        contents.ipc.on = function(channel, listener) {
+          if (typeof channel === 'string' && channel.includes('DesktopIntl_$_')) {
+            const wrappedListener = function(event, ...args) {
+              // Proxy senderFrame so origin validation (nue) passes for file:// URLs
+              const sf = event.senderFrame;
+              if (sf && sf.url && sf.url.startsWith('file:')) {
+                const proxiedEvent = new Proxy(event, {
+                  get(target, prop) {
+                    if (prop === 'senderFrame') {
+                      return new Proxy(sf, {
+                        get(frame, frameProp) {
+                          if (frameProp === 'url') return 'https://claude.ai/local-shell';
+                          return typeof frame[frameProp] === 'function'
+                            ? frame[frameProp].bind(frame)
+                            : frame[frameProp];
+                        },
+                      });
+                    }
+                    return target[prop];
+                  },
+                  set(target, prop, value) {
+                    target[prop] = value;
+                    return true;
+                  },
+                });
+                return listener.call(this, proxiedEvent, ...args);
+              }
+              return listener.call(this, event, ...args);
+            };
+            return origIpcOn(channel, wrappedListener);
+          }
+          return origIpcOn(channel, listener);
+        };
       }
     }, 'web-contents-created');
 
