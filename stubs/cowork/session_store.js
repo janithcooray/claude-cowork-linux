@@ -346,6 +346,20 @@ class SessionStore {
     this._activeSessionByRoot = new Map();
     this._sessionObservedAt = new Map();
     this._activeSessionId = null;
+    // Per-session caches to avoid repeated filesystem + normalize work
+    // on every IPC round-trip. TTL keeps them fresh without manual invalidation.
+    this._normalizedCache = new Map();   // sessionId -> { ts, data }
+    this._sessionInfoCache = new Map();  // sessionId -> { ts, info }
+  }
+
+  _getCached(cache, key, ttlMs) {
+    const entry = cache.get(key);
+    if (entry && (Date.now() - entry.ts) < ttlMs) return entry.data;
+    return undefined;
+  }
+
+  _setCache(cache, key, data) {
+    cache.set(key, { ts: Date.now(), data });
   }
 
   getSessionDirectory(sessionId) {
@@ -357,8 +371,16 @@ class SessionStore {
       return sessionData;
     }
 
-    const metadataPath = findSessionMetadataPath(this._localAgentRoot, sessionData.sessionId);
-    return this.normalizeSessionRecordForMetadataPath(metadataPath, sessionData);
+    const sid = sessionData.sessionId;
+    if (typeof sid === 'string') {
+      const cached = this._getCached(this._normalizedCache, sid, 2000);
+      if (cached) return cached;
+    }
+
+    const metadataPath = findSessionMetadataPath(this._localAgentRoot, sid);
+    const result = this.normalizeSessionRecordForMetadataPath(metadataPath, sessionData);
+    if (typeof sid === 'string') this._setCache(this._normalizedCache, sid, result);
+    return result;
   }
 
   getSessionInfo(sessionId) {
@@ -366,8 +388,13 @@ class SessionStore {
       return null;
     }
 
+    const cached = this._getCached(this._sessionInfoCache, sessionId, 2000);
+    if (cached) return cached;
+
     const metadataPath = findSessionMetadataPath(this._localAgentRoot, sessionId);
-    return this.getSessionInfoByMetadataPath(metadataPath);
+    const result = this.getSessionInfoByMetadataPath(metadataPath);
+    if (result) this._setCache(this._sessionInfoCache, sessionId, result);
+    return result;
   }
 
   getSessionInfoByMetadataPath(metadataPath) {
