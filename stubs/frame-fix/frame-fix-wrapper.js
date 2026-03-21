@@ -790,7 +790,8 @@ Module.prototype.require = function(id) {
 
   const module = originalRequire.apply(this, arguments);
 
-  if (id === 'electron') {
+  if (id === 'electron' && !global.__coworkElectronPatched) {
+    global.__coworkElectronPatched = true;
     console.log('[Frame Fix] Intercepting electron module');
 
     // Intercept ipcMain.handle to inject our VM handlers
