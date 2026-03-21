@@ -113,7 +113,6 @@ const BLOCKED_ENV_KEY_PATTERN = /oauth[_.]?token|bearer[_.]?token|session_?cooki
 // CLAUDE_CODE_OAUTH_TOKEN is the legitimate auth mechanism — the CLI needs it.
 const CREDENTIAL_EXEMPT_KEYS = new Set([
   'CLAUDE_CODE_OAUTH_TOKEN',
-  'CLAUDE_CODE_SESSION_ACCESS_TOKEN',
 ]);
 
 function filterEnv(baseEnv, additionalEnv) {
@@ -1676,10 +1675,6 @@ class SwiftAddonStub extends EventEmitter {
         if (!persistenceResult.success) {
           trace('WARNING: Failed to persist recovered cliSessionId for process ' + processState.id + ': ' + persistenceResult.error);
         }
-      }
-      // Clean up bridge credential refresh timer before re-spawn or final exit
-      if (self._sessionOrchestrator && typeof self._sessionOrchestrator.clearBridgeRefreshTimer === 'function') {
-        self._sessionOrchestrator.clearBridgeRefreshTimer(processState.id);
       }
       // Preserve null code for signaled exits - don't coerce to 0
       if (self._onExit) self._onExit(processState.id, code, signal || '');

@@ -5,10 +5,6 @@ const os = require('os');
 const path = require('path');
 
 const {
-  createSessionsApi,
-} = require('../../../stubs/cowork/sessions_api.js');
-const {
-  buildSdkUrl,
   createSessionOrchestrator,
   readRemoteSessionIdFromBridgeState,
 } = require('../../../stubs/cowork/session_orchestrator.js');
@@ -20,107 +16,6 @@ function createTempDir(t) {
   });
   return tempRoot;
 }
-
-// ============================================================================
-// fetchBridgeCredentials
-// ============================================================================
-
-test('fetchBridgeCredentials returns workerJwt, apiBaseUrl, expiresIn on success', () => {
-  const api = createSessionsApi({
-    authToken: 'oauth-token',
-    requestSync: (request) => {
-      assert.equal(request.method, 'POST');
-      assert.ok(request.url.includes('/v1/code/sessions/cse_abc123/bridge'));
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          worker_jwt: 'jwt-token-xyz',
-          api_base_url: 'https://api.anthropic.com',
-          expires_in: 3600,
-          worker_epoch: 42,
-        }),
-      };
-    },
-  });
-
-  const result = api.fetchBridgeCredentials('cse_abc123');
-  assert.equal(result.success, true);
-  assert.equal(result.workerJwt, 'jwt-token-xyz');
-  assert.equal(result.apiBaseUrl, 'https://api.anthropic.com');
-  assert.equal(result.expiresIn, 3600);
-  // worker_epoch intentionally omitted
-  assert.equal(result.workerEpoch, undefined);
-});
-
-test('fetchBridgeCredentials returns error on missing remoteSessionId', () => {
-  const api = createSessionsApi({ authToken: 'oauth-token' });
-  const result = api.fetchBridgeCredentials('');
-  assert.equal(result.success, false);
-  assert.ok(result.error.includes('Missing remoteSessionId'));
-});
-
-test('fetchBridgeCredentials returns error on malformed response', () => {
-  const api = createSessionsApi({
-    authToken: 'oauth-token',
-    requestSync: () => ({
-      statusCode: 200,
-      body: JSON.stringify({ some_other_field: 'value' }),
-    }),
-  });
-
-  const result = api.fetchBridgeCredentials('cse_abc123');
-  assert.equal(result.success, false);
-  assert.ok(result.error.includes('Malformed'));
-});
-
-test('fetchBridgeCredentials returns error on HTTP 401', () => {
-  const api = createSessionsApi({
-    authToken: 'oauth-token',
-    requestSync: () => ({
-      statusCode: 401,
-      body: JSON.stringify({ error: 'unauthorized' }),
-    }),
-  });
-
-  const result = api.fetchBridgeCredentials('cse_abc123');
-  assert.equal(result.success, false);
-  assert.equal(result.statusCode, 401);
-});
-
-test('fetchBridgeCredentials returns error on HTTP 500', () => {
-  const api = createSessionsApi({
-    authToken: 'oauth-token',
-    requestSync: () => ({
-      statusCode: 500,
-      body: JSON.stringify({ error: 'internal' }),
-    }),
-  });
-
-  const result = api.fetchBridgeCredentials('cse_abc123');
-  assert.equal(result.success, false);
-  assert.equal(result.statusCode, 500);
-});
-
-test('fetchBridgeCredentials encodes remoteSessionId in URL', () => {
-  let capturedUrl = null;
-  const api = createSessionsApi({
-    authToken: 'oauth-token',
-    requestSync: (request) => {
-      capturedUrl = request.url;
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          worker_jwt: 'jwt',
-          api_base_url: 'https://api.anthropic.com',
-          expires_in: 300,
-        }),
-      };
-    },
-  });
-
-  api.fetchBridgeCredentials('cse_special/chars');
-  assert.ok(capturedUrl.includes('cse_special%2Fchars'));
-});
 
 // ============================================================================
 // readRemoteSessionIdFromBridgeState
@@ -230,26 +125,6 @@ test('readRemoteSessionIdFromBridgeState skips non-object values in dict', (t) =
 });
 
 // ============================================================================
-// buildSdkUrl
-// ============================================================================
-
-test('buildSdkUrl converts https to wss and appends session path', () => {
-  const url = buildSdkUrl('https://api.anthropic.com', 'cse_abc');
-  assert.equal(url, 'wss://api.anthropic.com/v1/code/sessions/cse_abc');
-});
-
-test('buildSdkUrl converts http to ws', () => {
-  const url = buildSdkUrl('http://localhost:8080', 'cse_local');
-  assert.equal(url, 'ws://localhost:8080/v1/code/sessions/cse_local');
-});
-
-test('buildSdkUrl returns null for invalid inputs', () => {
-  assert.equal(buildSdkUrl('', 'cse_abc'), null);
-  assert.equal(buildSdkUrl('https://api.com', ''), null);
-  assert.equal(buildSdkUrl(null, 'cse_abc'), null);
-});
-
-// ============================================================================
 // _resolveBridgeSession integration
 // ============================================================================
 
@@ -341,7 +216,6 @@ test('_resolveBridgeSession graceful degradation when no bridge-state match', (t
     sessionStore,
     sessionsApi: {
       updateAuthToken: () => {},
-      fetchBridgeCredentials: () => { throw new Error('should not be called'); },
     },
   });
 
@@ -359,97 +233,5 @@ test('_resolveBridgeSession graceful degradation when no bridge-state match', (t
   // Should NOT be in bridge mode
   assert.notEqual(result.envVars.CLAUDE_CODE_ENVIRONMENT_KIND, 'bridge');
   assert.equal(result.envVars.CLAUDE_CODE_OAUTH_TOKEN, 'test-oauth');
-  assert.equal(result.bridgeSession, null);
   assert.ok(traces.some((m) => m.includes('no bridge-state entry')));
-});
-
-// ============================================================================
-// buildBridgeSpawnArgs with --sdk-url
-// ============================================================================
-
-test('buildBridgeSpawnArgs includes --sdk-url when provided', () => {
-  const { SessionOrchestrator } = require('../../../stubs/cowork/session_orchestrator.js');
-  // buildBridgeSpawnArgs is not exported directly, test via prepareVmSpawn output
-  // which is already tested above. Here we test the module-level function indirectly.
-  // The --sdk-url presence is verified in the integration test above.
-  assert.ok(true, 'covered by integration test');
-});
-
-// ============================================================================
-// Token refresh scheduling
-// ============================================================================
-
-test('scheduleBridgeRefresh schedules timer and clears on clearBridgeRefreshTimer', (t) => {
-  const traces = [];
-  const orchestrator = createOrchestratorWithBridge({
-    trace: (msg) => traces.push(msg),
-    sessionsApi: {
-      updateAuthToken: () => {},
-      fetchBridgeCredentials: () => ({
-        success: true,
-        workerJwt: 'refreshed-jwt',
-        apiBaseUrl: 'https://api.anthropic.com',
-        expiresIn: 600,
-        statusCode: 200,
-      }),
-    },
-  });
-
-  orchestrator.scheduleBridgeRefresh('pid-1', {
-    remoteSessionId: 'cse_timer_test',
-    expiresIn: 3600,
-    apiBaseUrl: 'https://api.anthropic.com',
-  }, () => {});
-
-  assert.ok(traces.some((m) => m.includes('refresh scheduled')));
-  assert.ok(orchestrator._bridgeRefreshTimers.has('pid-1'));
-
-  orchestrator.clearBridgeRefreshTimer('pid-1');
-  assert.ok(!orchestrator._bridgeRefreshTimers.has('pid-1'));
-  assert.ok(traces.some((m) => m.includes('refresh timer cleared')));
-});
-
-test('scheduleBridgeRefresh skips when expiresIn < 60', () => {
-  const traces = [];
-  const orchestrator = createOrchestratorWithBridge({
-    trace: (msg) => traces.push(msg),
-  });
-
-  orchestrator.scheduleBridgeRefresh('pid-short', {
-    remoteSessionId: 'cse_short',
-    expiresIn: 30,
-    apiBaseUrl: 'https://api.anthropic.com',
-  }, () => {});
-
-  assert.ok(traces.some((m) => m.includes('too short for refresh')));
-  assert.ok(!orchestrator._bridgeRefreshTimers.has('pid-short'));
-});
-
-test('scheduleBridgeRefresh skips when expiresIn is missing', () => {
-  const orchestrator = createOrchestratorWithBridge({ trace: () => {} });
-  orchestrator.scheduleBridgeRefresh('pid-none', {
-    remoteSessionId: 'cse_none',
-  }, () => {});
-  assert.ok(!orchestrator._bridgeRefreshTimers.has('pid-none'));
-});
-
-test('clearBridgeRefreshTimer is no-op for unknown processId', () => {
-  const orchestrator = createOrchestratorWithBridge({ trace: () => {} });
-  // Should not throw
-  orchestrator.clearBridgeRefreshTimer('nonexistent');
-  assert.ok(true);
-});
-
-// ============================================================================
-// CREDENTIAL_EXEMPT_KEYS includes SESSION_ACCESS_TOKEN
-// ============================================================================
-
-test('CREDENTIAL_EXEMPT_KEYS includes CLAUDE_CODE_SESSION_ACCESS_TOKEN', () => {
-  // Read the source to verify the set contents
-  const source = fs.readFileSync(
-    path.join(__dirname, '..', '..', '..', 'stubs', '@ant', 'claude-swift', 'js', 'index.js'),
-    'utf8'
-  );
-  assert.ok(source.includes("'CLAUDE_CODE_SESSION_ACCESS_TOKEN'"),
-    'CREDENTIAL_EXEMPT_KEYS should include CLAUDE_CODE_SESSION_ACCESS_TOKEN');
 });

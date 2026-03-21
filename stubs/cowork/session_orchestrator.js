@@ -432,26 +432,6 @@ function readRemoteSessionIdFromBridgeState(deps) {
   return null;
 }
 
-// Build the WebSocket SDK URL from apiBaseUrl for --sdk-url argument.
-// CLI's SDK URL handler converts wss: -> https: and appends /events for POSTing.
-function buildSdkUrl(apiBaseUrl, remoteSessionId) {
-  if (typeof apiBaseUrl !== 'string' || !apiBaseUrl.trim() ||
-      typeof remoteSessionId !== 'string' || !remoteSessionId.trim()) {
-    return null;
-  }
-  return apiBaseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
-    + '/v1/code/sessions/' + remoteSessionId;
-}
-
-// ============================================================================
-// TOKEN REFRESH CONSTANTS
-// ============================================================================
-// Matches CLI's bridge token refresh scheduler: 300s buffer before expiry, 30s floor
-const BRIDGE_REFRESH_BUFFER_MS = 300000;
-const BRIDGE_REFRESH_FLOOR_MS = 30000;
-const BRIDGE_REFRESH_MAX_FAILURES = 3;      // CLI abandons after 3 consecutive failures
-const BRIDGE_REFRESH_RETRY_DELAY_MS = 60000; // CLI retries after 60s on failure
-
 // ============================================================================
 // SESSION ORCHESTRATOR
 // ============================================================================
@@ -486,8 +466,6 @@ class SessionOrchestrator {
     this._liveAssistantMessageCache = new Map();
     this._liveAssistantStreamState = new Map();
     this._liveSessionCompatibilityState = new Map();
-    // Bridge credential refresh timers: Map<processId, { timer, remoteSessionId, failureCount }>
-    this._bridgeRefreshTimers = new Map();
   }
 
   prepareVmSpawn(context) {
@@ -1070,97 +1048,6 @@ class SessionOrchestrator {
     }
 
     return null;
-  }
-
-  // --- Bridge credential refresh ---
-
-  scheduleBridgeRefresh(processId, bridgeSession, processStdinWrite) {
-    const trace = this._deps.trace || (() => {});
-    if (!bridgeSession || typeof bridgeSession.expiresIn !== 'number') {
-      return;
-    }
-
-    if (bridgeSession.expiresIn < 60) {
-      trace('[bridge-creds] WARNING: expires_in=' + bridgeSession.expiresIn + ' too short for refresh (< 60s), skipping');
-      return;
-    }
-
-    const refreshDelayMs = Math.max(bridgeSession.expiresIn * 1000 - BRIDGE_REFRESH_BUFFER_MS, BRIDGE_REFRESH_FLOOR_MS);
-    trace('[bridge-creds] refresh scheduled: ' + refreshDelayMs + 'ms (expires_in=' + bridgeSession.expiresIn + 's, buffer=300s)');
-
-    const timerState = {
-      timer: null,
-      remoteSessionId: bridgeSession.remoteSessionId,
-      failureCount: 0,
-    };
-
-    const doRefresh = () => {
-      if (!this._bridgeRefreshTimers.has(processId)) {
-        return; // Timer was cleared (process exited)
-      }
-
-      if (!this._deps.sessionsApi || typeof this._deps.sessionsApi.fetchBridgeCredentials !== 'function') {
-        trace('[bridge-creds] refresh skipped: sessionsApi unavailable');
-        return;
-      }
-
-      const credResult = this._deps.sessionsApi.fetchBridgeCredentials(timerState.remoteSessionId);
-      if (credResult.success) {
-        timerState.failureCount = 0;
-        trace('[bridge-creds] refresh fired: status=' + (credResult.statusCode || 'ok')
-          + ', new_expires_in=' + credResult.expiresIn);
-
-        // Send token update to CLI via stdin
-        if (typeof processStdinWrite === 'function') {
-          const updatePayload = JSON.stringify({
-            type: 'update_environment_variables',
-            variables: { CLAUDE_CODE_SESSION_ACCESS_TOKEN: credResult.workerJwt },
-          }) + '\n';
-          try {
-            processStdinWrite(updatePayload);
-            trace('[bridge-creds] stdin token update: sent ' + updatePayload.length + ' bytes to pid=' + processId);
-          } catch (err) {
-            trace('[bridge-creds] stdin token update failed for pid=' + processId + ': ' + err.message);
-          }
-        }
-
-        // Schedule next refresh
-        const nextDelayMs = Math.max(credResult.expiresIn * 1000 - BRIDGE_REFRESH_BUFFER_MS, BRIDGE_REFRESH_FLOOR_MS);
-        timerState.timer = setTimeout(doRefresh, nextDelayMs);
-        if (timerState.timer.unref) timerState.timer.unref();
-      } else {
-        timerState.failureCount++;
-        trace('[bridge-creds] refresh failed: ' + (credResult.error || 'unknown')
-          + ' (attempt ' + timerState.failureCount + '/' + BRIDGE_REFRESH_MAX_FAILURES + ')');
-
-        if (timerState.failureCount >= BRIDGE_REFRESH_MAX_FAILURES) {
-          trace('[bridge-creds] refresh abandoned: max failures reached (' + timerState.failureCount
-            + '/' + BRIDGE_REFRESH_MAX_FAILURES + '), session continues without refresh');
-          return;
-        }
-
-        // Retry after delay
-        timerState.timer = setTimeout(doRefresh, BRIDGE_REFRESH_RETRY_DELAY_MS);
-        if (timerState.timer.unref) timerState.timer.unref();
-      }
-    };
-
-    timerState.timer = setTimeout(doRefresh, refreshDelayMs);
-    if (timerState.timer.unref) timerState.timer.unref();
-    this._bridgeRefreshTimers.set(processId, timerState);
-  }
-
-  clearBridgeRefreshTimer(processId) {
-    const trace = this._deps.trace || (() => {});
-    const timerState = this._bridgeRefreshTimers.get(processId);
-    if (!timerState) {
-      return;
-    }
-    if (timerState.timer) {
-      clearTimeout(timerState.timer);
-    }
-    this._bridgeRefreshTimers.delete(processId);
-    trace('[bridge-creds] refresh timer cleared for pid=' + processId + ' (process exited)');
   }
 
   dualWriteEvent(remoteSessionId, event) {
@@ -1961,7 +1848,6 @@ module.exports = {
   removeResumeArgs,
   symlinkGlobalConfig,
   // Bridge credential helpers
-  buildSdkUrl,
   readRemoteSessionIdFromBridgeState,
   // Phase 1: Message type filtering
   LIVE_EVENT_IGNORED_TYPES,

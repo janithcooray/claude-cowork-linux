@@ -117,3 +117,5 @@ Thumbs.db
 .idea/
 .vscode/
 install-oneclick.sh.backup*
+__pycache__/
+FAST-PASS-AUDIT.md
