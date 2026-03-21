@@ -97,7 +97,7 @@ function createDirs(options) {
   const xdgRuntimeDir = resolveAbsoluteDirectory(env.XDG_RUNTIME_DIR, path.join(xdgStateHome, 'runtime'));
 
   // Legacy macOS path for migration/compatibility
-  const legacyClaudeAppSupportRoot = path.join(homeDir, 'Library', 'Application Support', 'Claude');
+  // Legacy macOS path removed — ~/Library/Application Support/Claude never exists on Linux
 
   // Claude Desktop paths (shared between macOS and Linux builds)
   const claudeConfigRoot = path.join(xdgConfigHome, 'Claude');
@@ -130,7 +130,6 @@ function createDirs(options) {
     claudeVmRoots: [
       path.join(claudeConfigRoot, 'claude-code-vm'),
       path.join(coworkDataRoot, 'claude-code-vm'),
-      path.join(legacyClaudeAppSupportRoot, 'claude-code-vm'),
     ],
     coworkConfigRoot,
     coworkDataRoot,
@@ -140,7 +139,7 @@ function createDirs(options) {
     coworkSessionsStateRoot,
     coworkLogsDir,
     legacyCoworkLogsDir,
-    legacyClaudeAppSupportRoot,
+    // legacyClaudeAppSupportRoot removed — macOS path doesn't exist on Linux
   };
 }
 
