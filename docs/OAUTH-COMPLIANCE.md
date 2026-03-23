@@ -18,34 +18,6 @@ This project is a Linux compatibility layer for Claude Desktop's Cowork feature.
 
 ---
 
-## Architecture: Where OAuth Lives
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Claude Desktop (Unmodified Anthropic Renderer)                   │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  OAuth flow → Anthropic servers → Token stored in renderer  │ │
-│  │  (We never see this token)                                  │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-│                          │ IPC                                    │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  Our Stubs (this repo)                                      │ │
-│  │  ├─ Auth_$_doAuthInBrowser: opens browser only              │ │
-│  │  ├─ AuthRequest: opens browser only, isAvailable()→false    │ │
-│  │  ├─ addApprovedOauthToken: no-op (token discarded)          │ │
-│  │  ├─ filterEnv: passes CLAUDE_CODE_OAUTH_TOKEN, blocks rest  │ │
-│  │  └─ sdk_bridge: allowlisted env vars only                   │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-│                          │ spawn                                  │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  Claude Code CLI (Unmodified Anthropic Binary)              │ │
-│  │  └─ Authenticates independently via `claude login`          │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-```
-
----
-
 ## February 2026 Anthropic Policy Update
 
 On **February 19, 2026**, Anthropic clarified their "Authentication and credential use" policy:
